@@ -377,6 +377,9 @@ class RealSearchOrchestrator:
                 async with session.post(search_url, json=search_payload, headers=headers, timeout=30) as response:
                     if response.status != 200:
                         error_text = await response.text()
+                        if response.status == 402:
+                            logger.warning(f"⚠️ Firecrawl créditos insuficientes - pulando: {error_text}")
+                            return {'success': False, 'error': 'Insufficient credits', 'skip': True}
                         logger.error(f"❌ Firecrawl search erro {response.status}: {error_text}")
                         return {'success': False, 'error': f'Search HTTP {response.status}'}
 
@@ -406,13 +409,13 @@ class RealSearchOrchestrator:
                                 scrape_data = await scrape_response.json()
                                 content = scrape_data.get('data', {}).get('markdown', '')
 
-                                if content and len(content) > 100:  # Só aceita conteúdo substancial
+                                if content and len(content) > 500:  # Exige conteúdo REALMENTE substancial
                                     # Extrai e salva o conteúdo
                                     results = self._extract_search_results_from_content(content, 'firecrawl', session_id, url)
                                     all_results.extend(results)
                                     logger.info(f"✅ FIRECRAWL extraiu {len(content)} chars de {url}")
                                 else:
-                                    logger.warning(f"⚠️ Conteúdo vazio ou muito pequeno de {url}")
+                                    logger.debug(f"⚠️ Conteúdo insuficiente de {url}: {len(content) if content else 0} chars")
                             else:
                                 logger.warning(f"⚠️ Erro ao fazer scrape de {url}: {scrape_response.status}")
                     except Exception as e:
@@ -946,69 +949,83 @@ class RealSearchOrchestrator:
                 not any(word in title.lower() for word in ['exemplo', 'sample', 'test', 'mock', 'demo'])):
                 valid_results.append(result)
 
-        # NOVA FUNCIONALIDADE: Salva trechos de conteúdo extraído
+        # NOVA FUNCIONALIDADE: Salva trechos de conteúdo extraído (com deduplicação)
         if session_id and valid_results:
             try:
-                logger.info(f"🔍 Tentando salvar {len(valid_results)} resultados de {provider}")
-                for i, result in enumerate(valid_results):
-                    # Calcula score de qualidade baseado no tamanho e completude do conteúdo
-                    title = result.get('title', '')
-                    snippet = result.get('snippet', '')
-                    url = result.get('url', '') or source_url or ''
+                # Sistema de deduplicação por URL
+                seen_urls = set()
+                unique_results = []
+                for result in valid_results:
+                    url = result.get('url', '')
+                    if url and url not in seen_urls:
+                        seen_urls.add(url)
+                        unique_results.append(result)
+                
+                if unique_results:
+                    logger.info(f"🔍 Salvando {len(unique_results)} resultados únicos de {provider} (removidas {len(valid_results) - len(unique_results)} duplicatas)")
+                    for i, result in enumerate(unique_results):
+                        # Calcula score de qualidade baseado no tamanho e completude do conteúdo
+                        title = result.get('title', '')
+                        snippet = result.get('snippet', '')
+                        url = result.get('url', '') or source_url or ''
 
-                    logger.info(f"📝 Resultado {i+1}: title={len(title)} chars, snippet={len(snippet)} chars, url={url[:50]}...")
+                        logger.info(f"📝 Resultado {i+1}: title={len(title)} chars, snippet={len(snippet)} chars, url={url[:50]}...")
 
-                    # Apenas salva se tiver URL real - NÃO GERA URLs DE EXEMPLO
-                    if not url or not url.startswith('http') or 'example.com' in url:
-                        logger.debug(f"🔍 URL inválida ignorada (evitando spam): {url[:30]}...")
-                        continue
+                        # Apenas salva se tiver URL real - NÃO GERA URLs DE EXEMPLO
+                        if not url or not url.startswith('http') or 'example.com' in url:
+                            logger.debug(f"🔍 URL inválida ignorada (evitando spam): {url[:30]}...")
+                            continue
 
-                    # Conteúdo completo para salvar
-                    full_content = f"Título: {title}\n\nDescrição: {snippet}\n\nURL: {url}"
+                        # Conteúdo completo para salvar
+                        full_content = f"Título: {title}\n\nDescrição: {snippet}\n\nURL: {url}"
 
-                    # Score de qualidade baseado em completude
-                    quality_score = 0.0
-                    if title and len(title) > 20:
-                        quality_score += 30.0
-                    if snippet and len(snippet) > 50:
-                        quality_score += 40.0
-                    if url and url.startswith('http') and 'example.com' not in url:
-                        quality_score += 30.0
+                        # Score de qualidade REAL baseado em completude e relevância
+                        quality_score = 0.0
+                        if title and len(title) > 20:
+                            quality_score += 30.0
+                        if snippet and len(snippet) > 50:
+                            quality_score += 40.0
+                        if url and url.startswith('http') and 'example.com' not in url:
+                            quality_score += 30.0
+                        
+                        # Bonus por relevância ao nicho
+                        if any(keyword in (title + snippet).lower() for keyword in ['patchwork', 'costura', 'quilting', 'artesanato']):
+                            quality_score += 20.0
+                        
+                        # Log apenas se score for significativo
+                        if quality_score >= 50.0:
+                            logger.info(f"💯 Quality score: {quality_score} - {title[:50]}...")
 
-                    logger.info(f"💯 Quality score: {quality_score} (mínimo: 50.0)")
+                        # Salva APENAS se for dados reais válidos - ZERO SIMULAÇÃO
+                        if (quality_score >= 30.0 and url and url.startswith('http') and
+                            'example.com' not in url and len(title) > 10):
+                            try:
+                                # USA INTERFACE UNIFICADA DO AUTO SAVE MANAGER
+                                from services.auto_save_manager import auto_save_manager
 
-                    # Salva APENAS se for dados reais válidos - ZERO SIMULAÇÃO
-                    if (quality_score >= 30.0 and url and url.startswith('http') and
-                        'example.com' not in url and len(title) > 10):
-                        try:
-                            # USA INTERFACE UNIFICADA DO AUTO SAVE MANAGER
-                            from services.auto_save_manager import auto_save_manager
-
-                            content_data = {
-                                'url': url,
-                                'titulo': title,
-                                'conteudo': full_content,
-                                'metodo_extracao': provider,
-                                'qualidade': quality_score,
-                                'platform': 'web',
-                                'metadata': {
-                                    'provider': provider,
-                                    'extraction_timestamp': datetime.now().isoformat(),
-                                    'result_index': i,
-                                    'total_results': len(valid_results)
+                                content_data = {
+                                    'url': url,
+                                    'titulo': title,
+                                    'conteudo': full_content,
+                                    'metodo_extracao': provider,
+                                    'qualidade': quality_score,
+                                    'platform': 'web',
+                                    'metadata': {
+                                        'provider': provider,
+                                        'extraction_timestamp': datetime.now().isoformat(),
+                                        'result_index': i,
+                                        'total_results': len(unique_results)
+                                    }
                                 }
-                            }
 
-                            save_result = auto_save_manager.save_extracted_content(content_data, session_id or 'default_session')
-                            if save_result.get('success'):
-                                logger.info(f"✅ DADOS REAIS salvos via AutoSaveManager: {url[:50]}...")
-                            else:
-                                logger.error(f"❌ Falha no salvamento via AutoSaveManager: {save_result.get('error')}")
+                                save_result = auto_save_manager.save_extracted_content(content_data, session_id or 'default_session')
+                                if not save_result.get('success'):
+                                    logger.error(f"❌ Falha no salvamento via AutoSaveManager: {save_result.get('error')}")
 
-                        except Exception as save_error:
-                            logger.error(f"❌ Erro ao salvar resultado REAL {i+1}: {save_error}")
-                    else:
-                        logger.debug(f"🔍 Dados rejeitados (qualidade baixa): título={len(title)} chars")
+                            except Exception as save_error:
+                                logger.error(f"❌ Erro ao salvar resultado REAL {i+1}: {save_error}")
+                        else:
+                            logger.debug(f"🔍 Dados rejeitados (qualidade baixa): título={len(title)} chars")
 
             except Exception as e:
                 logger.error(f"❌ Erro ao salvar trechos de {provider}: {e}")

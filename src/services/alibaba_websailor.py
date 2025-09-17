@@ -2054,7 +2054,93 @@ class ViralImageFinder:
                         return image_path
             except Exception as e:
                 logger.warning(f"⚠️ Extração de imagem real falhou: {e}")
-        # Estratégia 3: Screenshot como último recurso
+        
+        # --- NOVA ESTRATÉGIA: BUSCA NO GOOGLE IMAGES ---
+        # Após falhar nas estratégias diretas de extração, tenta buscar a imagem no Google Images
+        if not image_path and platform == 'instagram':
+            logger.info(f"🔍 Tentando buscar imagem no Google Images para {post_url}")
+            
+            # Constrói a query para a busca de imagens no Google
+            google_search_query = f"https://{post_url.split('://')[1]}"  # Remove protocolo para evitar problemas com encoding
+            
+            try:
+                # Usar Serper API para realizar a busca de imagens no Google
+                # Isso evita problemas com cookies e captchas que podem ocorrer com requisições diretas
+                if self.api_keys.get('serper'):
+                    api_key = self._get_next_api_key('serper')
+                    if api_key:
+                        url = "https://google.serper.dev/images"
+                        payload = {
+                            "q": google_search_query,
+                            "num": 1,  # Busca apenas a primeira imagem
+                            "safe": "off",
+                            "gl": "br",  # Localização Brasil
+                            "hl": "pt-br",  # Idioma Português
+                            "imgSize": "large",  # Tamanho grande para melhor qualidade
+                            "imgType": "photo"  # Tipo de imagem
+                        }
+                        headers = {'X-API-KEY': api_key, 'Content-Type': 'application/json'}
+                        
+                        if HAS_ASYNC_DEPS:
+                            timeout = aiohttp.ClientTimeout(total=30)
+                            async with aiohttp.ClientSession(timeout=timeout) as session:
+                                async with session.post(url, json=payload, headers=headers) as response:
+                                    if response.status == 200:
+                                        try:
+                                            data = await response.json()
+                                            # Extrai a URL da primeira imagem encontrada
+                                            first_image = data.get('images', [{}])[0]
+                                            google_image_url = first_image.get('imageUrl')
+                                            
+                                            if google_image_url:
+                                                logger.info(f"✅ Imagem encontrada via Google Images: {google_image_url}")
+                                                # Tenta baixar a imagem
+                                                image_path = await self._download_image_robust(google_image_url, post_url)
+                                                if image_path:
+                                                    logger.info(f"✅ Imagem baixada com sucesso via Google Images: {image_path}")
+                                                    return image_path
+                                                else:
+                                                    logger.warning("⚠️ Download da imagem via Google Images falhou.")
+                                            else:
+                                                logger.warning("⚠️ Nenhuma imagem encontrada na resposta do Google Images.")
+                                        except json.JSONDecodeError as e:
+                                            logger.error(f"❌ Erro JSON ao processar resposta do Google Images: {e}")
+                                    elif response.status == 429:
+                                        logger.warning("⚠️ Rate limit Serper - aguardando...")
+                                        await asyncio.sleep(2)
+                                    else:
+                                        logger.warning(f"⚠️ Resposta inesperada do Google Images API: {response.status}")
+                        else:
+                            response = self.session.post(url, json=payload, headers=headers, timeout=30)
+                            if response.status_code == 200:
+                                try:
+                                    data = response.json()
+                                    first_image = data.get('images', [{}])[0]
+                                    google_image_url = first_image.get('imageUrl')
+                                    
+                                    if google_image_url:
+                                        logger.info(f"✅ Imagem encontrada via Google Images: {google_image_url}")
+                                        image_path = await self._download_image_robust(google_image_url, post_url)
+                                        if image_path:
+                                            logger.info(f"✅ Imagem baixada com sucesso via Google Images: {image_path}")
+                                            return image_path
+                                        else:
+                                            logger.warning("⚠️ Download da imagem via Google Images falhou.")
+                                    else:
+                                        logger.warning("⚠️ Nenhuma imagem encontrada na resposta do Google Images.")
+                                except json.JSONDecodeError as e:
+                                    logger.error(f"❌ Erro JSON ao processar resposta do Google Images: {e}")
+                            elif response.status_code == 429:
+                                logger.warning("⚠️ Rate limit Serper - aguardando...")
+                                time.sleep(2)
+                            else:
+                                logger.warning(f"⚠️ Resposta inesperada do Google Images API: {response.status_code}")
+                else:
+                    logger.warning("⚠️ Chave Serper não configurada para busca de imagens.")
+            except Exception as e:
+                logger.error(f"❌ Erro ao tentar buscar imagem no Google Images: {str(e)}")
+        
+        # Estratégia 4: Screenshot como último recurso
         logger.info(f"📸 Usando screenshot para {post_url}")
         return await self.take_screenshot(post_url, platform)
 
@@ -3359,6 +3445,7 @@ class AlibabaWebSailorAgent:
     def __init__(self):
         self.viral_image_finder = ViralImageFinder()
         self.auto_save_manager = AutoSaveManager()
+        self.enabled = True  # Adicionar atributo enabled
         logger.info("🌐 Alibaba WebSailor Agent inicializado")
 
     async def find_viral_images(self, query: str):

@@ -135,16 +135,8 @@ def start_step1_collection():
                         search_results = {'web_results': [], 'social_results': [], 'youtube_results': []}
                     logger.info(f"✅ Busca massiva concluída - Sessão: {session_id}")
 
-                    # EXECUTA BUSCA MASSIVA COM ALIBABA WEBSAILOR PARA CRIAR viral_results_*.json
-                    logger.info(f"🌐 Executando busca ALIBABA WebSailor - Sessão: {session_id}")
-                    massive_results = loop.run_until_complete(
-                        services['massive_search_engine'].execute_massive_search(
-                            produto=context.get('segmento', context.get('produto', query)),
-                            publico_alvo=context.get('publico', context.get('publico_alvo', 'público brasileiro')),
-                            session_id=session_id
-                        )
-                    )
-                    logger.info(f"✅ Busca ALIBABA WebSailor concluída - Sessão: {session_id}")
+                    # BUSCA MASSIVA JÁ FOI EXECUTADA ACIMA - NÃO REPETIR PARA EVITAR LOOP
+                    logger.info(f"✅ Dados coletados pela busca massiva - Sessão: {session_id}")
 
                     # Analisa e captura conteúdo viral
                     viral_analysis = loop.run_until_complete(

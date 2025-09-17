@@ -82,50 +82,38 @@ class MassiveSearchEngine:
 
             logger.info(f"📋 {len(search_queries)} queries geradas para busca massiva")
 
-            # Executar buscas até atingir tamanho mínimo
+            # Executar buscas com limite fixo para evitar loop infinito
             current_size = 0
             search_count = 0
+            max_searches = min(len(search_queries), 10)  # Máximo 10 buscas para evitar loop
 
-            while current_size < self.min_size_bytes and search_count < 50:  # Máximo 50 buscas
-                for query in search_queries:
-                    if current_size >= self.min_size_bytes:
-                        break
+            for query in search_queries[:max_searches]:  # Processa apenas as primeiras queries
+                search_count += 1
+                logger.info(f"🔍 Busca {search_count}: {query[:50]}...")
 
-                    search_count += 1
-                    logger.info(f"🔍 Busca {search_count}: {query[:50]}...")
+                # ALIBABA WebSailor - PRINCIPAL
+                try:
+                    websailor_result = await self._search_alibaba_websailor(query, session_id)
+                    if websailor_result:
+                        massive_data['busca_massiva']['alibaba_websailor_results'].append(websailor_result)
+                        massive_data['metadata']['apis_used'].append('alibaba_websailor')
+                        logger.info(f"✅ ALIBABA WebSailor: dados coletados")
+                except Exception as e:
+                    logger.warning(f"⚠️ ALIBABA WebSailor falhou: {e}")
 
-                    # ALIBABA WebSailor - PRINCIPAL
-                    try:
-                        websailor_result = await self._search_alibaba_websailor(query, session_id)
-                        if websailor_result:
-                            massive_data['busca_massiva']['alibaba_websailor_results'].append(websailor_result)
-                            massive_data['metadata']['apis_used'].append('alibaba_websailor')
-                            logger.info(f"✅ ALIBABA WebSailor: dados coletados")
-                    except Exception as e:
-                        logger.warning(f"⚠️ ALIBABA WebSailor falhou: {e}")
+                # REAL SEARCH ORCHESTRATOR JÁ FOI EXECUTADO NO WORKFLOW - EVITAR LOOP
+                # Apenas registra que os dados já foram coletados
+                massive_data['metadata']['apis_used'].append('real_search_orchestrator_already_executed')
+                logger.info(f"✅ Real Search Orchestrator: dados já coletados no workflow principal")
 
-                    # REAL SEARCH ORCHESTRATOR - PRINCIPAL
-                    try:
-                        real_search_result = await self._search_real_orchestrator(query, session_id)
-                        if real_search_result:
-                            massive_data['busca_massiva']['real_search_orchestrator_results'].append(real_search_result)
-                            massive_data['metadata']['apis_used'].append('real_search_orchestrator')
-                            logger.info(f"✅ Real Search Orchestrator: dados coletados")
-                    except Exception as e:
-                        logger.warning(f"⚠️ Real Search Orchestrator falhou: {e}")
+                # Verificar tamanho atual
+                current_json = json.dumps(massive_data, ensure_ascii=False, indent=2)
+                current_size = len(current_json.encode('utf-8'))
 
-                    # Verificar tamanho atual
-                    current_json = json.dumps(massive_data, ensure_ascii=False, indent=2)
-                    current_size = len(current_json.encode('utf-8'))
+                logger.info(f"📊 Tamanho atual: {current_size/1024:.1f}KB / {self.min_size_kb}KB")
 
-                    logger.info(f"📊 Tamanho atual: {current_size/1024:.1f}KB / {self.min_size_kb}KB")
-
-                    # Pequena pausa entre buscas
-                    await asyncio.sleep(1)
-
-                # Se ainda não atingiu o tamanho, expandir queries
-                if current_size < self.min_size_bytes:
-                    search_queries.extend(self._generate_expanded_queries(produto, publico_alvo))
+                # Pequena pausa entre buscas
+                await asyncio.sleep(1)
 
             # Finalizar dados
             massive_data['timestamp_fim'] = datetime.now().isoformat()
@@ -222,11 +210,12 @@ class MassiveSearchEngine:
 
             # CHAMA O MÉTODO CORRETO QUE CRIA O viral_results_*.json
             try:
-                viral_result = await self.websailor.viral_image_finder.find_viral_images(query)
-                if isinstance(viral_result, tuple) and len(viral_result) == 2:
-                    viral_images_list, viral_output_file = viral_result
+                viral_result = await self.websailor.find_viral_images(query)
+                if isinstance(viral_result, list):
+                    viral_images_list = viral_result
+                    viral_output_file = f"viral_results_{session_id}.json"
                 else:
-                    viral_images_list = viral_result if viral_result else []
+                    viral_images_list = []
                     viral_output_file = ""
             except Exception as e:
                 logger.error(f"❌ Erro na busca de imagens virais: {e}")
