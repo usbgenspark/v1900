@@ -189,8 +189,7 @@ def check_quotas():
 @monitoring_bp.route('/api/app_status')
 def app_status():
     try:
-        from src.services.health_checker import HealthChecker
-        health_checker = HealthChecker()
+        from services.health_checker import health_checker
         status_data = health_checker.get_system_health()
 
         # Garantir que status_data é um dicionário válido

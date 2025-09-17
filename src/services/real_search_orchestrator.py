@@ -44,7 +44,7 @@ class RealSearchOrchestrator:
         self.providers = [
             'ALIBABA_WEBSAILOR',  # Adicionado como prioridade máxima
             'FIRECRAWL',
-            'JINA', 
+            'JINA',
             'GOOGLE',
             'EXA',
             'SERPER',
@@ -74,6 +74,14 @@ class RealSearchOrchestrator:
 
         logger.info(f"🚀 Real Search Orchestrator inicializado com {sum(len(keys) for keys in self.api_keys.values())} chaves totais")
         logger.info("🔥 MODO: 100% DADOS REAIS - ZERO SIMULAÇÃO - ZERO EXEMPLOS")
+
+    def _salvar_erro(self, error_type: str, error_data: Dict[str, Any]):
+        """Salva erros para debug"""
+        try:
+            from services.auto_save_manager import auto_save_manager
+            auto_save_manager.save_error(error_type, error_data)
+        except Exception as e:
+            logger.error(f"❌ Erro ao salvar erro {error_type}: {e}")
 
     def _load_all_api_keys(self) -> Dict[str, List[str]]:
         """Carrega todas as chaves de API do ambiente"""
@@ -126,8 +134,8 @@ class RealSearchOrchestrator:
         return key
 
     async def execute_massive_real_search(
-        self, 
-        query: str, 
+        self,
+        query: str,
         context: Dict[str, Any],
         session_id: str
     ) -> Dict[str, Any]:
@@ -160,7 +168,7 @@ class RealSearchOrchestrator:
             # FASE 1: Busca com Alibaba WebSailor (prioritária)
             logger.info("🔍 FASE 1: Busca com Alibaba WebSailor")
             websailor_results = await self._search_alibaba_websailor(query, context, session_id)
-            
+
             if websailor_results.get('success'):
                 search_results['web_results'].extend(websailor_results['results'])
                 search_results['providers_used'].append('ALIBABA_WEBSAILOR')
@@ -263,22 +271,22 @@ class RealSearchOrchestrator:
                 title = result.get('title', '').lower()
                 content = result.get('content', '').lower()
                 url = result.get('url', '').lower()
-                
+
                 # Filtra dados que parecem ser exemplos/simulação
                 if not any(word in title + content + url for word in [
                     'exemplo', 'sample', 'test', 'mock', 'demo', 'placeholder',
                     'lorem ipsum', 'fake', 'dummy', 'template'
                 ]):
                     real_results.append(result)
-            
+
             # Atualiza com apenas dados reais
             search_results['web_results'] = [r for r in search_results['web_results'] if r in real_results]
             search_results['social_results'] = [r for r in search_results['social_results'] if r in real_results]
             search_results['youtube_results'] = [r for r in search_results['youtube_results'] if r in real_results]
-            
+
             final_count = len(real_results)
             filtered_count = len(all_results) - final_count
-            
+
             logger.info(f"✅ BUSCA 100% REAL CONCLUÍDA em {search_duration:.2f}s")
             logger.info(f"📊 {final_count} resultados REAIS de {len(search_results['providers_used'])} provedores")
             logger.info(f"🗑️ {filtered_count} resultados simulados/exemplo REMOVIDOS")
@@ -289,6 +297,7 @@ class RealSearchOrchestrator:
 
         except Exception as e:
             logger.error(f"❌ ERRO CRÍTICO na busca massiva: {e}")
+            self._salvar_erro('massive_search_error', {'error': str(e)})
             raise
 
     async def _search_alibaba_websailor(self, query: str, context: Dict[str, Any], session_id: str = None) -> Dict[str, Any]:
@@ -296,7 +305,7 @@ class RealSearchOrchestrator:
         try:
             # Importa o agente WebSailor
             from services.alibaba_websailor import alibaba_websailor
-            
+
             if not alibaba_websailor or not alibaba_websailor.enabled:
                 logger.warning("⚠️ Alibaba WebSailor não está habilitado")
                 return {'success': False, 'error': 'Alibaba WebSailor não habilitado'}
@@ -316,7 +325,7 @@ class RealSearchOrchestrator:
             # Converte resultados do WebSailor para formato padrão
             results = []
             fontes_detalhadas = research_result.get('conteudo_consolidado', {}).get('fontes_detalhadas', [])
-            
+
             for fonte in fontes_detalhadas:
                 results.append({
                     'title': fonte.get('title', ''),
@@ -328,7 +337,7 @@ class RealSearchOrchestrator:
                 })
 
             logger.info(f"✅ Alibaba WebSailor processado com {len(results)} resultados")
-            
+
             return {
                 'success': True,
                 'provider': 'ALIBABA_WEBSAILOR',
@@ -341,6 +350,8 @@ class RealSearchOrchestrator:
             return {'success': False, 'error': 'Alibaba WebSailor não disponível'}
         except Exception as e:
             logger.error(f"❌ Erro Alibaba WebSailor: {e}")
+            from services.auto_save_manager import salvar_erro
+            salvar_erro('alibaba_websailor_error', {'error': str(e)})
             return {'success': False, 'error': str(e)}
 
     async def _search_firecrawl(self, query: str, session_id: str = None) -> Dict[str, Any]:
@@ -368,10 +379,10 @@ class RealSearchOrchestrator:
                         error_text = await response.text()
                         logger.error(f"❌ Firecrawl search erro {response.status}: {error_text}")
                         return {'success': False, 'error': f'Search HTTP {response.status}'}
-                    
+
                     search_data = await response.json()
                     urls = [item.get('url') for item in search_data.get('data', []) if item.get('url')]
-                    
+
                     if not urls:
                         logger.warning("⚠️ Nenhuma URL encontrada no search")
                         return {'success': False, 'error': 'No URLs found'}
@@ -379,7 +390,7 @@ class RealSearchOrchestrator:
                 # FASE 2: SCRAPE das URLs encontradas
                 all_results = []
                 scrape_url = 'https://api.firecrawl.dev/v1/scrape'
-                
+
                 for url in urls[:3]:  # Limita a 3 URLs para não sobrecarregar
                     try:
                         scrape_payload = {
@@ -394,7 +405,7 @@ class RealSearchOrchestrator:
                             if scrape_response.status == 200:
                                 scrape_data = await scrape_response.json()
                                 content = scrape_data.get('data', {}).get('markdown', '')
-                                
+
                                 if content and len(content) > 100:  # Só aceita conteúdo substancial
                                     # Extrai e salva o conteúdo
                                     results = self._extract_search_results_from_content(content, 'firecrawl', session_id, url)
@@ -418,6 +429,7 @@ class RealSearchOrchestrator:
 
         except Exception as e:
             logger.error(f"❌ Erro Firecrawl: {e}")
+            self._salvar_erro('firecrawl_error', {'error': str(e)})
             return {'success': False, 'error': str(e)}
 
     async def _search_jina(self, query: str, session_id: str = None) -> Dict[str, Any]:
@@ -467,6 +479,7 @@ class RealSearchOrchestrator:
 
         except Exception as e:
             logger.error(f"❌ Erro Jina: {e}")
+            self._salvar_erro('jina_error', {'error': str(e)})
             return {'success': False, 'error': str(e)}
 
     async def _search_google(self, query: str) -> Dict[str, Any]:
@@ -521,6 +534,7 @@ class RealSearchOrchestrator:
 
         except Exception as e:
             logger.error(f"❌ Erro Google: {e}")
+            self._salvar_erro('google_error', {'error': str(e)})
             return {'success': False, 'error': str(e)}
 
     async def _search_youtube(self, query: str) -> Dict[str, Any]:
@@ -589,6 +603,7 @@ class RealSearchOrchestrator:
 
         except Exception as e:
             logger.error(f"❌ Erro YouTube: {e}")
+            self._salvar_erro('youtube_error', {'error': str(e)})
             return {'success': False, 'error': str(e)}
 
     async def _get_youtube_video_stats(self, video_id: str, api_key: str, session: "aiohttp.ClientSession") -> Dict[str, Any]:
@@ -680,6 +695,7 @@ class RealSearchOrchestrator:
 
         except Exception as e:
             logger.error(f"❌ Erro Supadata: {e}")
+            self._salvar_erro('supadata_error', {'error': str(e)})
             return {'success': False, 'error': str(e)}
 
     async def _search_twitter(self, query: str) -> Dict[str, Any]:
@@ -748,6 +764,7 @@ class RealSearchOrchestrator:
 
         except Exception as e:
             logger.error(f"❌ Erro X/Twitter: {e}")
+            self._salvar_erro('twitter_error', {'error': str(e)})
             return {'success': False, 'error': str(e)}
 
     async def _search_exa(self, query: str) -> Dict[str, Any]:
@@ -808,6 +825,7 @@ class RealSearchOrchestrator:
 
         except Exception as e:
             logger.error(f"❌ Erro Exa: {e}")
+            self._salvar_erro('exa_error', {'error': str(e)})
             return {'success': False, 'error': str(e)}
 
     async def _search_serper(self, query: str) -> Dict[str, Any]:
@@ -863,6 +881,7 @@ class RealSearchOrchestrator:
 
         except Exception as e:
             logger.error(f"❌ Erro Serper: {e}")
+            self._salvar_erro('serper_error', {'error': str(e)})
             return {'success': False, 'error': str(e)}
 
     def _extract_search_results_from_content(self, content: str, provider: str, session_id: str = None, source_url: str = None) -> List[Dict[str, Any]]:
@@ -883,8 +902,8 @@ class RealSearchOrchestrator:
                 continue
 
             # Detecta títulos reais (linhas com mais de 20 caracteres e sem URLs)
-            if (len(line) > 20 and 
-                not line.startswith('http') and 
+            if (len(line) > 20 and
+                not line.startswith('http') and
                 not line.startswith('www') and
                 '.' not in line[:10] and
                 not line.startswith('Exemplo') and
@@ -923,7 +942,7 @@ class RealSearchOrchestrator:
         valid_results = []
         for result in results:
             title = result.get('title', '')
-            if (title and len(title) > 10 and 
+            if (title and len(title) > 10 and
                 not any(word in title.lower() for word in ['exemplo', 'sample', 'test', 'mock', 'demo'])):
                 valid_results.append(result)
 
@@ -936,17 +955,17 @@ class RealSearchOrchestrator:
                     title = result.get('title', '')
                     snippet = result.get('snippet', '')
                     url = result.get('url', '') or source_url or ''
-                    
+
                     logger.info(f"📝 Resultado {i+1}: title={len(title)} chars, snippet={len(snippet)} chars, url={url[:50]}...")
-                    
+
                     # Apenas salva se tiver URL real - NÃO GERA URLs DE EXEMPLO
                     if not url or not url.startswith('http') or 'example.com' in url:
-                        logger.warning(f"⚠️ URL inválida ou de exemplo ignorada: {url}")
+                        logger.debug(f"🔍 URL inválida ignorada (evitando spam): {url[:30]}...")
                         continue
-                    
+
                     # Conteúdo completo para salvar
                     full_content = f"Título: {title}\n\nDescrição: {snippet}\n\nURL: {url}"
-                    
+
                     # Score de qualidade baseado em completude
                     quality_score = 0.0
                     if title and len(title) > 20:
@@ -955,16 +974,16 @@ class RealSearchOrchestrator:
                         quality_score += 40.0
                     if url and url.startswith('http') and 'example.com' not in url:
                         quality_score += 30.0
-                    
+
                     logger.info(f"💯 Quality score: {quality_score} (mínimo: 50.0)")
-                    
+
                     # Salva APENAS se for dados reais válidos - ZERO SIMULAÇÃO
-                    if (quality_score >= 30.0 and url and url.startswith('http') and 
+                    if (quality_score >= 30.0 and url and url.startswith('http') and
                         'example.com' not in url and len(title) > 10):
                         try:
                             # USA INTERFACE UNIFICADA DO AUTO SAVE MANAGER
                             from services.auto_save_manager import auto_save_manager
-                            
+
                             content_data = {
                                 'url': url,
                                 'titulo': title,
@@ -979,20 +998,21 @@ class RealSearchOrchestrator:
                                     'total_results': len(valid_results)
                                 }
                             }
-                            
-                            save_result = auto_save_manager.save_extracted_content(content_data, session_id)
+
+                            save_result = auto_save_manager.save_extracted_content(content_data, session_id or 'default_session')
                             if save_result.get('success'):
                                 logger.info(f"✅ DADOS REAIS salvos via AutoSaveManager: {url[:50]}...")
                             else:
                                 logger.error(f"❌ Falha no salvamento via AutoSaveManager: {save_result.get('error')}")
-                                
+
                         except Exception as save_error:
                             logger.error(f"❌ Erro ao salvar resultado REAL {i+1}: {save_error}")
                     else:
-                        logger.warning(f"⚠️ Dados não-reais rejeitados: título={len(title)} chars, url={url[:50] if url else 'vazio'}")
-                        
+                        logger.debug(f"🔍 Dados rejeitados (qualidade baixa): título={len(title)} chars")
+
             except Exception as e:
                 logger.error(f"❌ Erro ao salvar trechos de {provider}: {e}")
+                self._salvar_erro('content_extraction_save_error', {'provider': provider, 'error': str(e)})
 
         return valid_results[:15]  # Máximo 15 por provedor
 
@@ -1004,8 +1024,8 @@ class RealSearchOrchestrator:
 
         # Ordena por score viral
         sorted_content = sorted(
-            all_social_results, 
-            key=lambda x: x.get('viral_score', 0), 
+            all_social_results,
+            key=lambda x: x.get('viral_score', 0),
             reverse=True
         )
 
@@ -1101,9 +1121,11 @@ class RealSearchOrchestrator:
 
         except ImportError:
             logger.error("❌ Selenium não instalado - screenshots não disponíveis")
+            self._salvar_erro('selenium_not_installed', {})
             return []
         except Exception as e:
             logger.error(f"❌ Erro na captura de screenshots: {e}")
+            self._salvar_erro('screenshot_capture_error', {'error': str(e)})
             return []
 
         return screenshots
@@ -1161,6 +1183,16 @@ class RealSearchOrchestrator:
     def get_session_statistics(self) -> Dict[str, Any]:
         """Retorna estatísticas da sessão atual"""
         return self.session_stats.copy()
+
+    def _salvar_erro(self, erro: str, detalhes: dict = None):
+        """Salva erro do processo"""
+        try:
+            from services.auto_save_manager import auto_save_manager
+            if hasattr(auto_save_manager, 'save_error'):
+                auto_save_manager.save_error(erro, detalhes or {})
+        except Exception as e:
+            logger.warning(f"⚠️ Erro ao salvar erro {erro}: {e}")
+
 
 # Instância global
 real_search_orchestrator = RealSearchOrchestrator()

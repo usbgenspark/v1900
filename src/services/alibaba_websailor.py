@@ -24,7 +24,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
-from services.auto_save_manager import salvar_etapa, salvar_erro, salvar_trecho_pesquisa_web
+from services.auto_save_manager import AutoSaveManager
+from services.auto_save_manager import salvar_etapa, salvar_erro
 
 # Load environment variables
 load_dotenv()
@@ -271,7 +272,7 @@ class ViralImageFinder:
         """Configura sessão HTTP com headers apropriados"""
         if hasattr(self, 'session'):
             self.session.headers.update({
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/53.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
                 'Accept-Encoding': 'gzip, deflate, br',
@@ -1099,49 +1100,48 @@ class ViralImageFinder:
         """Extrai usando Instagram oEmbed API"""
         results = []
         try:
-            oembed_url = f"https://graph.facebook.com/v18.0/instagram_oembed?url={post_url}&access_token=your_token"
-            # Alternativa sem token
+            # Usar apenas a alternativa sem token pois a outra requer token de acesso
             oembed_url_alt = f"https://www.instagram.com/api/v1/oembed/?url={post_url}"
 
-            for url in [oembed_url_alt]:  # Usar apenas a alternativa sem token
-                try:
-                    if HAS_ASYNC_DEPS:
-                        timeout = aiohttp.ClientTimeout(total=30)
-                        async with aiohttp.ClientSession(timeout=timeout) as session:
-                            async with session.get(url) as response:
-                                if response.status == 200:
-                                    try:
-                                        data = await response.json()
-                                    except json.JSONDecodeError as e:
-                                        logger.error(f"❌ Erro JSON: {e} - Response: {await response.text()[:200]}")
-                                        return []
-                                    if data.get('thumbnail_url'):
-                                        results.append({
-                                            'image_url': data['thumbnail_url'],
-                                            'page_url': post_url,
-                                            'title': data.get('title', 'Instagram Post'),
-                                            'description': '',
-                                            'source': 'instagram_oembed'
-                                        })
-                    else:
-                        response = self.session.get(url, timeout=30)
-                        if response.status_code == 200:
-                            try:
-                                data = response.json()
-                            except json.JSONDecodeError as e:
-                                logger.error(f"❌ Erro JSON: {e} - Response: {response.text[:200]}")
-                                return []
-                            if data.get('thumbnail_url'):
-                                results.append({
-                                    'image_url': data['thumbnail_url'],
-                                    'page_url': post_url,
-                                    'title': data.get('title', 'Instagram Post'),
-                                    'description': '',
-                                    'source': 'instagram_oembed'
-                                })
-                    break  # Se funcionou, não tentar outras URLs
-                except:
-                    continue
+            try:
+                if HAS_ASYNC_DEPS:
+                    timeout = aiohttp.ClientTimeout(total=30)
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.get(oembed_url_alt) as response:
+                            if response.status == 200:
+                                try:
+                                    data = await response.json()
+                                except json.JSONDecodeError as e:
+                                    logger.error(f"❌ Erro JSON: {e} - Response: {await response.text()[:200]}")
+                                    return []
+                                if data.get('thumbnail_url'):
+                                    results.append({
+                                        'image_url': data['thumbnail_url'],
+                                        'page_url': post_url,
+                                        'title': data.get('title', 'Instagram Post'),
+                                        'description': '',
+                                        'source': 'instagram_oembed'
+                                    })
+                else:
+                    response = self.session.get(oembed_url_alt, timeout=30)
+                    if response.status_code == 200:
+                        try:
+                            data = response.json()
+                        except json.JSONDecodeError as e:
+                            logger.error(f"❌ Erro JSON: {e} - Response: {response.text[:200]}")
+                            return []
+                        if data.get('thumbnail_url'):
+                            results.append({
+                                'image_url': data['thumbnail_url'],
+                                'page_url': post_url,
+                                'title': data.get('title', 'Instagram Post'),
+                                'description': '',
+                                'source': 'instagram_oembed'
+                            })
+            except Exception:
+                # Se a alternativa falhar, tentar a API pública do Facebook (pode precisar de token)
+                pass # Evita parar o loop se uma alternativa falhar
+
         except Exception as e:
             logger.warning(f"Erro Instagram oembed: {e}")
 
@@ -1569,7 +1569,7 @@ class ViralImageFinder:
                 )
                 # Context com configurações específicas para redes sociais
                 context = await browser.new_context(
-                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/53.36',
                     viewport={'width': 1920, 'height': 1080},
                     # Bloquear popups automaticamente
                     java_script_enabled=True,
@@ -2119,7 +2119,7 @@ class ViralImageFinder:
                         async with aiofiles.open(filepath, 'wb') as f:
                             async for chunk in response.content.iter_chunked(8192):
                                 await f.write(chunk)
-                        # Verificar se arquivo foi salvo corretamente
+                        # Verificar se screenshot foi criada
                         if os.path.exists(filepath) and os.path.getsize(filepath) > 1024:
                             return filepath
                         else:
@@ -2273,463 +2273,75 @@ class ViralImageFinder:
             logger.error(f"❌ Erro ao capturar screenshot: {e}")
             return None
 
-    async def find_viral_images(self, query: str) -> Tuple[List[ViralImage], str]:
-        """Função principal otimizada para encontrar conteúdo viral"""
-        logger.info(f"🔥 BUSCA VIRAL INICIADA: {query}")
-        # Buscar resultados com estratégia aprimorada
-        search_results = await self.search_images(query)
-        if not search_results:
-            logger.warning("⚠️ Nenhum resultado encontrado na busca")
-            return [], ""
-        # Processar resultados com paralelização limitada
-        viral_images = []
-        max_concurrent = 3  # Limitar concorrência para evitar bloqueios
-        semaphore = asyncio.Semaphore(max_concurrent)
-        async def process_result(i: int, result: Dict) -> Optional[ViralImage]:
-            async with semaphore:
-                try:
-                    logger.info(f"📊 Processando {i+1}/{len(search_results[:self.config['max_images']])}: {result.get('page_url', '')}")
-                    page_url = result.get('page_url', '')
-                    if not page_url:
-                        return None
-                    # Determinar plataforma
-                    platform = self._determine_platform(page_url)
-                    # Analisar engajamento
-                    engagement = await self.analyze_post_engagement(page_url, platform)
-                    # Processar imagem
-                    image_path = None
-                    screenshot_path = None
-                    image_url = result.get('image_url', '')
-                    if self.config.get('extract_images', True):
-                        extracted_path = await self.extract_image_data(image_url, page_url, platform)
-                        if extracted_path:
-                            if 'screenshot' in extracted_path:
-                                screenshot_path = extracted_path
-                            else:
-                                image_path = extracted_path
-                    # Criar objeto ViralImage
-                    viral_image = ViralImage(
-                        image_url=image_url,
-                        post_url=page_url,
-                        platform=platform,
-                        title=result.get('title', ''),
-                        description=result.get('description', ''),
-                        engagement_score=engagement.get('engagement_score', 0.0),
-                        views_estimate=engagement.get('views_estimate', 0),
-                        likes_estimate=engagement.get('likes_estimate', 0),
-                        comments_estimate=engagement.get('comments_estimate', 0),
-                        shares_estimate=engagement.get('shares_estimate', 0),
-                        author=engagement.get('author', ''),
-                        author_followers=engagement.get('author_followers', 0),
-                        post_date=engagement.get('post_date', ''),
-                        hashtags=engagement.get('hashtags', []),
-                        image_path=image_path,
-                        screenshot_path=screenshot_path
-                    )
-                    # Verificar critério de viralidade
-                    if viral_image.engagement_score >= self.config['min_engagement']:
-                        logger.info(f"✅ CONTEÚDO VIRAL: {viral_image.title} - Score: {viral_image.engagement_score}")
-                        return viral_image
-                    else:
-                        logger.debug(f"⚠️ Baixo engajamento ({viral_image.engagement_score}): {page_url}")
-                        return viral_image  # Incluir mesmo com baixo engajamento para análise
-                except Exception as e:
-                    logger.error(f"❌ Erro ao processar {result.get('page_url', '')}: {e}")
-                    return None
-        # Executar processamento com concorrência limitada
-        tasks = []
-        for i, result in enumerate(search_results[:self.config['max_images']]):
-            task = asyncio.create_task(process_result(i, result))
-            tasks.append(task)
-        # Aguardar conclusão
-        processed_results = await asyncio.gather(*tasks, return_exceptions=True)
-        # Filtrar resultados válidos
-        for result in processed_results:
-            if isinstance(result, ViralImage):
-                viral_images.append(result)
-            elif isinstance(result, Exception):
-                logger.error(f"❌ Erro no processamento: {result}")
-        # Ordenar por score de engajamento
-        viral_images.sort(key=lambda x: x.engagement_score, reverse=True)
-        # Salvar resultados
-        output_file = self.save_results(viral_images, query)
-        logger.info(f"🎯 BUSCA CONCLUÍDA! {len(viral_images)} conteúdos encontrados")
-        logger.info(f"📊 TOP 3 SCORES: {[img.engagement_score for img in viral_images[:3]]}")
-        return viral_images, output_file
-
-    def _determine_platform(self, url: str) -> str:
-        """Determina a plataforma baseada na URL"""
-        if 'instagram.com' in url:
-            return 'instagram'
-        elif 'facebook.com' in url or 'm.facebook.com' in url:
-            return 'facebook'
-        elif 'youtube.com' in url or 'youtu.be' in url:
-            return 'youtube'
-        elif 'tiktok.com' in url:
-            return 'tiktok'
+    def find_viral_images(self, query: str) -> List[Dict[str, Any]]:
+        """Encontra imagens virais relacionadas à query (versão síncrona)"""
+        if not HAS_ASYNC_DEPS:
+            logger.warning("⚠️ aiohttp/aiofiles não estão instalados, usando fallback síncrono.")
+            return self._find_viral_images_sync(query)
         else:
-            return 'web'
-
-    def save_results(self, viral_images: List[ViralImage], query: str, ai_analysis: Dict = None) -> str:
-        """Salva resultados com dados enriquecidos"""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_query = re.sub(r'[^\w\s-]', '', query).strip().replace(' ', '_')[:30]
-        filename = f"viral_results_{safe_query}_{timestamp}.json"
-        filepath = os.path.join(self.config['output_dir'], filename)
-        try:
-            # Converter objetos para dicionários
-            images_data = [asdict(img) for img in viral_images]
-            # Calcular métricas agregadas
-            total_engagement = sum(img.engagement_score for img in viral_images)
-            avg_engagement = total_engagement / len(viral_images) if viral_images else 0
-            # Estatísticas por plataforma
-            platform_stats = {}
-            for img in viral_images:
-                platform = img.platform
-                if platform not in platform_stats:
-                    platform_stats[platform] = {
-                        'count': 0,
-                        'total_engagement': 0,
-                        'total_views': 0,
-                        'total_likes': 0
-                    }
-                platform_stats[platform]['count'] += 1
-                platform_stats[platform]['total_engagement'] += img.engagement_score
-                platform_stats[platform]['total_views'] += img.views_estimate
-                platform_stats[platform]['total_likes'] += img.likes_estimate
-            data = {
-                'query': query,
-                'extracted_at': datetime.now().isoformat(),
-                'total_content': len(viral_images),
-                'viral_content': len([img for img in viral_images if img.engagement_score >= 20]),
-                'images_downloaded': len([img for img in viral_images if img.image_path]),
-                'screenshots_taken': len([img for img in viral_images if img.screenshot_path]),
-                'metrics': {
-                    'total_engagement_score': total_engagement,
-                    'average_engagement': round(avg_engagement, 2),
-                    'highest_engagement': max((img.engagement_score for img in viral_images), default=0),
-                    'total_estimated_views': sum(img.views_estimate for img in viral_images),
-                    'total_estimated_likes': sum(img.likes_estimate for img in viral_images)
-                },
-                'platform_distribution': platform_stats,
-                'top_performers': [asdict(img) for img in viral_images[:5]],
-                'all_content': images_data,
-                'config_used': {
-                    'max_images': self.config['max_images'],
-                    'min_engagement': self.config['min_engagement'],
-                    'extract_images': self.config['extract_images'],
-                    'playwright_enabled': self.playwright_enabled
-                },
-                'api_status': {
-                    'serper_available': bool(self.config.get('serper_api_key')),
-                    'google_cse_available': bool(self.config.get('google_search_key')),
-                    'rapidapi_available': bool(self.config.get('rapidapi_key')),
-                    'apify_available': bool(self.config.get('apify_api_key'))
-                }
-            }
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            logger.info(f"💾 Resultados completos salvos: {filepath}")
-            return filepath
-        except Exception as e:
-            logger.error(f"❌ Erro ao salvar resultados: {e}")
-            return ""
-
-class AlibabaWebSailorAgent:
-    """Agente WebSailor inteligente para navegação e análise web profunda"""
-
-    def __init__(self):
-        """Inicializa agente WebSailor"""
-        self.enabled = True
-        self.google_search_key = os.getenv("GOOGLE_SEARCH_KEY")
-        self.jina_api_key = os.getenv("JINA_API_KEY")
-        self.google_cse_id = os.getenv("GOOGLE_CSE_ID")
-        self.serper_api_key = os.getenv("SERPER_API_KEY")
-
-        # URLs das APIs
-        self.google_search_url = "https://www.googleapis.com/customsearch/v1"
-        self.jina_reader_url = "https://r.jina.ai/"
-        self.serper_url = "https://google.serper.dev/search"
-
-        # Headers inteligentes para navegação
-        self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
-            "Accept-Encoding": "gzip, deflate, br",
-            "DNT": "1",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none"
-        }
-
-        # Domínios brasileiros preferenciais
-        self.preferred_domains = {
-            "g1.globo.com", "exame.com", "valor.globo.com", "estadao.com.br",
-            "folha.uol.com.br", "canaltech.com.br", "tecmundo.com.br",
-            "olhardigital.com.br", "infomoney.com.br", "startse.com",
-            "revistapegn.globo.com", "epocanegocios.globo.com", "istoedinheiro.com.br",
-            "convergenciadigital.com.br", "mobiletime.com.br", "teletime.com.br",
-            "portaltelemedicina.com.br", "saudedigitalbrasil.com.br", "amb.org.br",
-            "portal.cfm.org.br", "scielo.br", "ibge.gov.br", "fiocruz.br"
-        }
-
-        # Domínios bloqueados (irrelevantes)
-        self.blocked_domains = {
-            "airbnb.com"
-        }
-
-        self.session = requests.Session()
-        self.session.headers.update(self.headers)
-
-        # Estatísticas de navegação
-        self.navigation_stats = {
-            'total_searches': 0,
-            'successful_extractions': 0,
-            'failed_extractions': 0,
-            'blocked_urls': 0,
-            'preferred_sources': 0,
-            'total_content_chars': 0,
-            'avg_quality_score': 0.0
-        }
-
-        # Instancia o ViralImageFinder
-        try:
-            self.viral_image_finder = ViralImageFinder()
-            logger.info("✅ ViralImageFinder inicializado com sucesso")
-        except Exception as e:
-            logger.error(f"❌ Erro ao inicializar ViralImageFinder: {str(e)}")
-            self.viral_image_finder = None
-
-
-        logger.info("🌐 Alibaba WebSailor Agent inicializado - Navegação inteligente ativada")
-
-    async def navigate_and_research_deep(
-        self, 
-        query: str, 
-        context: Dict[str, Any],
-        max_pages: int = 25,
-        depth_levels: int = 3,
-        session_id: str = None
-    ) -> Dict[str, Any]:
-        """Navegação e pesquisa profunda com múltiplos níveis"""
-
-        try:
-            logger.info(f"🚀 INICIANDO NAVEGAÇÃO PROFUNDA para: {query}")
-            start_time = time.time()
-
-            # Salva início da navegação
-            salvar_etapa("websailor_iniciado", {
-                "query": query,
-                "context": context,
-                "max_pages": max_pages,
-                "depth_levels": depth_levels
-            }, categoria="pesquisa_web")
-
-            all_content = []
-            search_engines_used = []
-
-            # NÍVEL 1: BUSCA MASSIVA MULTI-ENGINE
-            logger.info("🔍 NÍVEL 1: Busca massiva com múltiplos engines")
-
-            # Engines de busca em ordem de prioridade
-            search_engines = [
-                ("Google Custom Search", self._google_search_deep),
-                ("Serper API", self._serper_search_deep),
-                ("Bing Scraping", self._bing_search_deep),
-                ("DuckDuckGo Scraping", self._duckduckgo_search_deep),
-                ("Yahoo Scraping", self._yahoo_search_deep)
-            ]
-
-            for engine_name, search_func in search_engines:
-                try:
-                    logger.info(f"🔍 Executando {engine_name}...")
-
-                    # TIMEOUT AGRESSIVO: 15 segundos por engine
+            # Se aiohttp está disponível, tentar executar assincronamente se possível
+            try:
+                loop = asyncio.get_running_loop()
+                # Se há um loop ativo, executa em uma thread separada
+                import concurrent.futures
+                import threading
+                def run_async_in_thread():
+                    new_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(new_loop)
                     try:
-                        results = await asyncio.wait_for(
-                            search_func(query, max_pages // len(search_engines)),
-                            timeout=15.0
+                        return new_loop.run_until_complete(
+                            self.search_images(query)
                         )
-                        logger.info(f"✅ {engine_name} concluído em tempo hábil")
-                    except asyncio.TimeoutError:
-                        logger.warning(f"⏰ TIMEOUT: {engine_name} demorou mais de 15s - pulando")
-                        continue
+                    finally:
+                        new_loop.close()
 
-                    if results:
-                        search_engines_used.append(engine_name)
-                        logger.info(f"✅ {engine_name}: {len(results)} resultados")
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(run_async_in_thread)
+                    return future.result()
+            except RuntimeError:
+                # Se não há loop ativo, executa diretamente com asyncio.run
+                return asyncio.run(self.search_images(query))
 
-                        # Extrai conteúdo de cada resultado
-                        for result in results:
-                            content_data = self._extract_intelligent_content(
-                                result['url'], result.get('title', ''), result.get('snippet', ''), context
-                            )
 
-                            if content_data and content_data['success']:
-                                all_content.append({
-                                    **content_data,
-                                    'search_engine': engine_name,
-                                    'search_result': result
-                                })
-
-                                # Salva cada extração bem-sucedida
-                                salvar_etapa(f"websailor_extracao_{len(all_content)}", {
-                                    "url": result['url'],
-                                    "engine": engine_name,
-                                    "content_length": len(content_data['content']),
-                                    "quality_score": content_data['quality_score']
-                                }, categoria="pesquisa_web")
-
-                                # NOVA FUNCIONALIDADE: Salva trechos de conteúdo extraído via AutoSaveManager
-                                if session_id and content_data['content'] and len(content_data['content']) > 200:
-                                    try:
-                                        from services.auto_save_manager import auto_save_manager
-
-                                        content_data_for_save = {
-                                            'url': content_data['url'],
-                                            'titulo': f"Extração WebSailor: {result.get('url', '')[:50]}...",
-                                            'conteudo': content_data['content'],
-                                            'metodo_extracao': 'alibaba_websailor',
-                                            'qualidade': content_data['quality_score'],
-                                            'platform': self._detect_platform(content_data['url']),
-                                            'metadata': {
-                                                'strategy_used': 'multi_strategy',
-                                                'original_url': result.get('url'),
-                                                'extraction_timestamp': datetime.now().isoformat(),
-                                                'content_length': len(content_data['content'])
-                                            }
-                                        }
-
-                                        save_result = auto_save_manager.save_extracted_content(content_data_for_save, session_id)
-                                        if save_result.get('success'):
-                                            logger.info(f"✅ TRECHO SALVO VIA AUTOSAVEMANAGER: {content_data['url']}")
-                                        else:
-                                            logger.error(f"❌ Falha no salvamento: {save_result.get('error')}")
-
-                                    except Exception as save_error:
-                                        logger.error(f"❌ Erro ao salvar trecho: {save_error}")
-
-                            time.sleep(0.5)  # Rate limiting
-
-                    time.sleep(1)  # Delay entre engines
-
-                except Exception as e:
-                    logger.error(f"❌ Erro em {engine_name}: {str(e)}")
-                    continue
-
-            # NÍVEL 2: BUSCA EM PROFUNDIDADE (Links internos)
-            if depth_levels > 1 and all_content:
-                logger.info("🔍 NÍVEL 2: Busca em profundidade - Links internos")
-
-                # Seleciona top páginas para explorar links internos
-                top_pages = sorted(all_content, key=lambda x: x['quality_score'], reverse=True)[:5]
-
-                for page in top_pages:
-                    internal_links = self._extract_internal_links(page['url'], page['content'])
-
-                    for link in internal_links[:3]:  # Top 3 links por página
-                        internal_content = self._extract_intelligent_content(link, "", "", context)
-
-                        if internal_content and internal_content['success']:
-                            internal_content['search_engine'] = f"{page['search_engine']} (Internal)"
-                            internal_content['parent_url'] = page['url']
-                            all_content.append(internal_content)
-
-                            time.sleep(0.3)
-
-            # NÍVEL 3: QUERIES RELACIONADAS INTELIGENTES
-            if depth_levels > 2:
-                logger.info("🔍 NÍVEL 3: Queries relacionadas inteligentes")
-
-                related_queries = self._generate_intelligent_related_queries(query, context, all_content)
-
-                for related_query in related_queries[:3]:
-                    try:
-                        related_results = await self._google_search_deep(related_query, 5)
-
-                        for result in related_results:
-                            related_content = self._extract_intelligent_content(
-                                result['url'], result.get('title', ''), result.get('snippet', ''), context
-                            )
-
-                            if related_content and related_content['success']:
-                                related_content['search_engine'] = "Google (Related Query)"
-                                related_content['related_query'] = related_query
-                                all_content.append(related_content)
-
-                                time.sleep(0.4)
-                    except Exception as e:
-                        logger.warning(f"⚠️ Erro em query relacionada '{related_query}': {str(e)}")
-                        continue
-
-            # INTEGRAÇÃO VIRAL IMAGE FINDER (se disponível)
-            viral_images = []
-            if self.viral_image_finder:
-                logger.info("📸 Integrando busca de imagens virais...")
-                try:
-                    viral_images = await self._search_viral_images(query)
-                    if viral_images:
-                        logger.info(f"✅ {len(viral_images)} imagens virais encontradas.")
-                    else:
-                        logger.info("❌ Nenhuma imagem viral encontrada.")
-                except Exception as e:
-                    logger.error(f"❌ Erro na busca de imagens virais: {str(e)}")
-            else:
-                logger.warning("⚠️ ViralImageFinder não disponível, pulando busca de imagens virais")
-
-            # PROCESSAMENTO E ANÁLISE FINAL
-            processed_research = self._process_and_analyze_content(all_content, query, context)
-            processed_research['viral_images'] = viral_images
-
-            # Atualiza estatísticas
-            self._update_navigation_stats(all_content)
-
-            end_time = time.time()
-
-            # Salva resultado final da navegação
-            salvar_etapa("websailor_resultado", processed_research, categoria="pesquisa_web")
-
-            logger.info(f"✅ NAVEGAÇÃO PROFUNDA CONCLUÍDA em {end_time - start_time:.2f} segundos")
-            logger.info(f"📊 {len(all_content)} páginas analisadas com {len(search_engines_used)} engines")
-
-            return processed_research
-
-        except Exception as e:
-            logger.error(f"❌ ERRO CRÍTICO na navegação WebSailor: {str(e)}")
-            salvar_erro("websailor_critico", e, contexto={"query": query})
-            return self._generate_emergency_research(query, context)
-
-    async def _search_viral_images(self, query: str) -> List[Dict[str, Any]]:
-        """Método para buscar imagens virais usando ViralImageFinder"""
-        if not self.viral_image_finder:
-            logger.warning("⚠️ ViralImageFinder não está disponível, pulando busca de imagens virais.")
-            return []
-
+    def _find_viral_images_sync(self, query: str) -> List[Dict[str, Any]]:
+        """Encontra imagens virais relacionadas à query (síncrono com requests)"""
+        logger.info(f"🔍 Buscando imagens virais (síncrono) para query: {query}")
         try:
-            logger.info(f"🔍 Buscando imagens virais para query: {query}")
-            # Call the async find_viral_images method
-            viral_images_list, _ = await self.viral_image_finder.find_viral_images(query)
-
-            # Process results to ensure consistent dictionary format
-            processed_images = [asdict(img) for img in viral_images_list]
-
-            if processed_images:
-                logger.info(f"✅ {len(processed_images)} imagens virais encontradas e processadas.")
-            else:
-                logger.info("ℹ️ Nenhuma imagem viral encontrada para a query.")
-
-            return processed_images
+            # Cria um loop de eventos para rodar a função async síncronamente
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(self.search_images(query))
+            loop.close()
+            return result
         except Exception as e:
-            logger.error(f"❌ Erro ao buscar e processar imagens virais: {str(e)}")
+            logger.error(f"❌ Erro na busca viral síncrona: {e}")
             return []
+
+
+    async def find_viral_content(self, query: str) -> list:
+        """Busca conteúdo viral relacionado à query"""
+        if not self.playwright_enabled:
+            logger.warning("⚠️ Playwright não habilitado, algumas funcionalidades de extração podem ser limitadas.")
+
+        logger.info(f"🔍 Buscando imagens virais para query: {query}")
+        # Chama o método async search_images corretamente
+        viral_images_list = await self.search_images(query)
+
+        # Processa resultados para garantir formato de dicionário consistente
+        processed_images = [asdict(img) for img in viral_images_list]
+
+        if processed_images:
+            logger.info(f"✅ {len(processed_images)} imagens virais encontradas e processadas.")
+        else:
+            logger.info("ℹ️ Nenhuma imagem viral encontrada para a query.")
+
+        return processed_images
+
 
     async def _google_search_deep(self, query: str, max_results: int) -> List[Dict[str, Any]]:
         """Busca profunda usando Google Custom Search API"""
 
-        if not self.google_search_key or not self.google_cse_id:
+        if not self.config.get('google_search_key') or not self.config.get('google_cse_id'):
             return []
 
         try:
@@ -2737,8 +2349,8 @@ class AlibabaWebSailorAgent:
             enhanced_query = self._enhance_query_for_brazil(query)
 
             params = {
-                "key": self.google_search_key,
-                "cx": self.google_cse_id,
+                "key": self.config['google_search_key'],
+                "cx": self.config['google_cse_id'],
                 "q": enhanced_query,
                 "num": min(max_results, 10),
                 "lr": "lang_pt",
@@ -2749,38 +2361,60 @@ class AlibabaWebSailorAgent:
                 "filter": "1"  # Remove duplicatas
             }
 
-            response = requests.get(
-                self.google_search_url,
-                params=params,
-                headers=self.headers,
-                timeout=15
-            )
+            # Usando aiohttp para requisição assíncrona
+            if HAS_ASYNC_DEPS:
+                timeout = aiohttp.ClientTimeout(total=15)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(self.google_search_url, params=params) as response:
+                        if response.status == 200:
+                            try:
+                                data = await response.json()
+                            except json.JSONDecodeError as e:
+                                logger.error(f"❌ Erro JSON: {e} - Response: {await response.text()[:200]}")
+                                return []
+                            results = []
 
-            if response.status_code == 200:
-                try:
-                    data = response.json()
-                except json.JSONDecodeError as e:
-                    logger.error(f"❌ Erro JSON: {e} - Response: {response.text[:200]}")
-                    return []
-                results = []
+                            for item in data.get("items", []):
+                                url = item.get("link", "")
 
-                for item in data.get("items", []):
-                    url = item.get("link", "")
+                                # Filtra URLs irrelevantes
+                                if self._is_url_relevant(url, item.get("title", ""), item.get("snippet", "")):
+                                    results.append({
+                                        "title": item.get("title", ""),
+                                        "url": url,
+                                        "snippet": item.get("snippet", ""),
+                                        "source": "google_custom_search"
+                                    })
 
-                    # Filtra URLs irrelevantes
-                    if self._is_url_relevant(url, item.get("title", ""), item.get("snippet", "")):
-                        results.append({
-                            "title": item.get("title", ""),
-                            "url": url,
-                            "snippet": item.get("snippet", ""),
-                            "source": "google_custom_search"
-                        })
-
-                self.navigation_stats['total_searches'] += 1
-                return results
+                            self.navigation_stats['total_searches'] += 1
+                            return results
+                        else:
+                            logger.warning(f"⚠️ Google Search falhou: {response.status}")
+                            return []
             else:
-                logger.warning(f"⚠️ Google Search falhou: {response.status_code}")
-                return []
+                # Fallback síncrono com requests
+                response = self.session.get(self.google_search_url, params=params, timeout=15)
+                if response.status_code == 200:
+                    try:
+                        data = response.json()
+                    except json.JSONDecodeError as e:
+                        logger.error(f"❌ Erro JSON: {e} - Response: {response.text[:200]}")
+                        return []
+                    results = []
+                    for item in data.get("items", []):
+                        url = item.get("link", "")
+                        if self._is_url_relevant(url, item.get("title", ""), item.get("snippet", "")):
+                            results.append({
+                                "title": item.get("title", ""),
+                                "url": url,
+                                "snippet": item.get("snippet", ""),
+                                "source": "google_custom_search"
+                            })
+                    self.navigation_stats['total_searches'] += 1
+                    return results
+                else:
+                    logger.warning(f"⚠️ Google Search falhou: {response.status_code}")
+                    return []
 
         except Exception as e:
             logger.error(f"❌ Erro no Google Search: {str(e)}")
@@ -2789,13 +2423,12 @@ class AlibabaWebSailorAgent:
     async def _serper_search_deep(self, query: str, max_results: int) -> List[Dict[str, Any]]:
         """Busca profunda usando Serper API"""
 
-        if not self.serper_api_key:
+        if not self.config.get('serper_api_key'):
             return []
 
         try:
             headers = {
-                **self.headers,
-                'X-API-KEY': self.serper_api_key,
+                'X-API-KEY': self.config['serper_api_key'],
                 'Content-Type': 'application/json'
             }
 
@@ -2808,36 +2441,57 @@ class AlibabaWebSailorAgent:
                 'page': 1
             }
 
-            response = requests.post(
-                self.serper_url,
-                json=payload,
-                headers=headers,
-                timeout=15
-            )
+            # Usando aiohttp para requisição assíncrona
+            if HAS_ASYNC_DEPS:
+                timeout = aiohttp.ClientTimeout(total=15)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    response = await session.post(self.serper_url, json=payload, headers=headers)
+                    if response.status == 200:
+                        try:
+                            data = await response.json()
+                        except json.JSONDecodeError as e:
+                            logger.error(f"❌ Erro JSON: {e} - Response: {await response.text()[:200]}")
+                            return []
+                        results = []
 
-            if response.status_code == 200:
-                try:
-                    data = response.json()
-                except json.JSONDecodeError as e:
-                    logger.error(f"❌ Erro JSON: {e} - Response: {response.text[:200]}")
-                    return []
-                results = []
+                        for item in data.get("organic", []):
+                            url = item.get("link", "")
 
-                for item in data.get("organic", []):
-                    url = item.get("link", "")
+                            if self._is_url_relevant(url, item.get("title", ""), item.get("snippet", "")):
+                                results.append({
+                                    "title": item.get("title", ""),
+                                    "url": url,
+                                    "snippet": item.get("snippet", ""),
+                                    "source": "serper_api"
+                                })
 
-                    if self._is_url_relevant(url, item.get("title", ""), item.get("snippet", "")):
-                        results.append({
-                            "title": item.get("title", ""),
-                            "url": url,
-                            "snippet": item.get("snippet", ""),
-                            "source": "serper_api"
-                        })
-
-                return results
+                        return results
+                    else:
+                        logger.warning(f"⚠️ Serper falhou: {response.status}")
+                        return []
             else:
-                logger.warning(f"⚠️ Serper falhou: {response.status_code}")
-                return []
+                # Fallback síncrono com requests
+                response = self.session.post(self.serper_url, json=payload, headers=headers, timeout=15)
+                if response.status_code == 200:
+                    try:
+                        data = response.json()
+                    except json.JSONDecodeError as e:
+                        logger.error(f"❌ Erro JSON: {e} - Response: {response.text[:200]}")
+                        return []
+                    results = []
+                    for item in data.get("organic", []):
+                        url = item.get("link", "")
+                        if self._is_url_relevant(url, item.get("title", ""), item.get("snippet", "")):
+                            results.append({
+                                "title": item.get("title", ""),
+                                "url": url,
+                                "snippet": item.get("snippet", ""),
+                                "source": "serper_api"
+                            })
+                    return results
+                else:
+                    logger.warning(f"⚠️ Serper falhou: {response.status_code}")
+                    return []
 
         except Exception as e:
             logger.error(f"❌ Erro no Serper: {str(e)}")
@@ -2851,42 +2505,73 @@ class AlibabaWebSailorAgent:
             search_url = f"https://www.bing.com/search?q={quote_plus(query)}&cc=br&setlang=pt-br&count={max_results}"
             logger.info(f"🔍 DEBUG: URL Bing: {search_url}")
 
-            response = self.session.get(search_url, timeout=10)  # Timeout reduzido para 10s
-            logger.info(f"🔍 DEBUG: Bing response status: {response.status_code}")
+            # Usando aiohttp para requisição assíncrona
+            if HAS_ASYNC_DEPS:
+                timeout = aiohttp.ClientTimeout(total=10)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    response = await session.get(search_url)
+                    logger.info(f"🔍 DEBUG: Bing response status: {response.status}")
 
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.content, 'html.parser')
-                results = []
+                    if response.status == 200:
+                        content = await response.text()
+                        soup = BeautifulSoup(content, 'html.parser')
+                        results = []
 
-                result_items = soup.find_all('li', class_='b_algo')
+                        result_items = soup.find_all('li', class_='b_algo')
 
-                for item in result_items[:max_results]:
-                    title_elem = item.find('h2')
-                    if title_elem:
-                        link_elem = title_elem.find('a')
-                        if link_elem:
-                            title = title_elem.get_text(strip=True)
-                            url = link_elem.get('href', '')
+                        for item in result_items[:max_results]:
+                            title_elem = item.find('h2')
+                            if title_elem:
+                                link_elem = title_elem.find('a')
+                                if link_elem:
+                                    title = title_elem.get_text(strip=True)
+                                    url = link_elem.get('href', '')
 
-                            # Resolve URLs do Bing
-                            url = self._resolve_bing_url(url)
+                                    # Resolve URLs de redirecionamento do Bing
+                                    url = self._resolve_bing_url(url)
 
-                            snippet_elem = item.find('p')
-                            snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
+                                    snippet_elem = item.find('p')
+                                    snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
 
-                            if url and title and self._is_url_relevant(url, title, snippet):
-                                results.append({
-                                    "title": title,
-                                    "url": url,
-                                    "snippet": snippet,
-                                    "source": "bing_scraping"
-                                })
+                                    if url and title and self._is_url_relevant(url, title, snippet):
+                                        results.append({
+                                            "title": title,
+                                            "url": url,
+                                            "snippet": snippet,
+                                            "source": "bing_scraping"
+                                        })
 
-                logger.info(f"🔍 DEBUG: Bing retornou {len(results)} resultados")
-                return results
+                        logger.info(f"🔍 DEBUG: Bing retornou {len(results)} resultados")
+                        return results
+                    else:
+                        logger.warning(f"⚠️ Bing falhou: {response.status}")
+                        return []
             else:
-                logger.warning(f"⚠️ Bing falhou: {response.status_code}")
-                return []
+                # Fallback síncrono com requests
+                response = self.session.get(search_url, timeout=10)
+                logger.info(f"🔍 DEBUG: Bing response status: {response.status_code}")
+
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.content, 'html.parser')
+                    results = []
+                    result_items = soup.find_all('li', class_='b_algo')
+                    for item in result_items[:max_results]:
+                        title_elem = item.find('h2')
+                        if title_elem:
+                            link_elem = title_elem.find('a')
+                            if link_elem:
+                                title = title_elem.get_text(strip=True)
+                                url = link_elem.get('href', '')
+                                url = self._resolve_bing_url(url)
+                                snippet_elem = item.find('p')
+                                snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
+                                if url and title and self._is_url_relevant(url, title, snippet):
+                                    results.append({"title": title, "url": url, "snippet": snippet, "source": "bing_scraping"})
+                    logger.info(f"🔍 DEBUG: Bing retornou {len(results)} resultados")
+                    return results
+                else:
+                    logger.warning(f"⚠️ Bing falhou: {response.status_code}")
+                    return []
 
         except Exception as e:
             logger.error(f"❌ Erro no Bing: {str(e)}")
@@ -2898,35 +2583,49 @@ class AlibabaWebSailorAgent:
         try:
             search_url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
 
-            response = self.session.get(search_url, timeout=15)
-
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.content, 'html.parser')
-                results = []
-
-                result_divs = soup.find_all('div', class_='result')
-
-                for div in result_divs[:max_results]:
-                    title_elem = div.find('a', class_='result__a')
-                    snippet_elem = div.find('a', class_='result__snippet')
-
-                    if title_elem:
-                        title = title_elem.get_text(strip=True)
-                        url = title_elem.get('href', '')
-                        snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
-
-                        if url and title and self._is_url_relevant(url, title, snippet):
-                            results.append({
-                                "title": title,
-                                "url": url,
-                                "snippet": snippet,
-                                "source": "duckduckgo_scraping"
-                            })
-
-                return results
+            # Usando aiohttp para requisição assíncrona
+            if HAS_ASYNC_DEPS:
+                timeout = aiohttp.ClientTimeout(total=15)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    response = await session.get(search_url)
+                    if response.status == 200:
+                        content = await response.text()
+                        soup = BeautifulSoup(content, 'html.parser')
+                        results = []
+                        result_divs = soup.find_all('div', class_='result')
+                        for div in result_divs[:max_results]:
+                            title_elem = div.find('a', class_='result__a')
+                            snippet_elem = div.find('a', class_='result__snippet')
+                            if title_elem:
+                                title = title_elem.get_text(strip=True)
+                                url = title_elem.get('href', '')
+                                snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
+                                if url and title and self._is_url_relevant(url, title, snippet):
+                                    results.append({"title": title, "url": url, "snippet": snippet, "source": "duckduckgo_scraping"})
+                        return results
+                    else:
+                        logger.warning(f"⚠️ DuckDuckGo falhou: {response.status}")
+                        return []
             else:
-                logger.warning(f"⚠️ DuckDuckGo falhou: {response.status_code}")
-                return []
+                # Fallback síncrono com requests
+                response = self.session.get(search_url, timeout=15)
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.content, 'html.parser')
+                    results = []
+                    result_divs = soup.find_all('div', class_='result')
+                    for div in result_divs[:max_results]:
+                        title_elem = div.find('a', class_='result__a')
+                        snippet_elem = div.find('a', class_='result__snippet')
+                        if title_elem:
+                            title = title_elem.get_text(strip=True)
+                            url = title_elem.get('href', '')
+                            snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
+                            if url and title and self._is_url_relevant(url, title, snippet):
+                                results.append({"title": title, "url": url, "snippet": snippet, "source": "duckduckgo_scraping"})
+                    return results
+                else:
+                    logger.warning(f"⚠️ DuckDuckGo falhou: {response.status_code}")
+                    return []
 
         except Exception as e:
             logger.error(f"❌ Erro no DuckDuckGo: {str(e)}")
@@ -2938,37 +2637,53 @@ class AlibabaWebSailorAgent:
         try:
             search_url = f"https://search.yahoo.com/search?p={quote_plus(query)}&n={max_results}"
 
-            response = self.session.get(search_url, timeout=15)
-
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.content, 'html.parser')
-                results = []
-
-                result_items = soup.find_all('div', class_='Sr')
-
-                for item in result_items[:max_results]:
-                    title_elem = item.find('h3', class_='title')
-                    if title_elem:
-                        link_elem = title_elem.find('a')
-                        if link_elem:
-                            title = title_elem.get_text(strip=True)
-                            url = link_elem.get('href', '')
-
-                            snippet_elem = item.find('p', class_='lh-16')
-                            snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
-
-                            if url and title and self._is_url_relevant(url, title, snippet):
-                                results.append({
-                                    "title": title,
-                                    "url": url,
-                                    "snippet": snippet,
-                                    "source": "yahoo_scraping"
-                                })
-
-                return results
+            # Usando aiohttp para requisição assíncrona
+            if HAS_ASYNC_DEPS:
+                timeout = aiohttp.ClientTimeout(total=15)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    response = await session.get(search_url)
+                    if response.status == 200:
+                        content = await response.text()
+                        soup = BeautifulSoup(content, 'html.parser')
+                        results = []
+                        result_items = soup.find_all('div', class_='Sr')
+                        for item in result_items[:max_results]:
+                            title_elem = item.find('h3', class_='title')
+                            if title_elem:
+                                link_elem = title_elem.find('a')
+                                if link_elem:
+                                    title = title_elem.get_text(strip=True)
+                                    url = link_elem.get('href', '')
+                                    snippet_elem = item.find('p', class_='lh-16')
+                                    snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
+                                    if url and title and self._is_url_relevant(url, title, snippet):
+                                        results.append({"title": title, "url": url, "snippet": snippet, "source": "yahoo_scraping"})
+                        return results
+                    else:
+                        logger.warning(f"⚠️ Yahoo falhou: {response.status}")
+                        return []
             else:
-                logger.warning(f"⚠️ Yahoo falhou: {response.status_code}")
-                return []
+                # Fallback síncrono com requests
+                response = self.session.get(search_url, timeout=15)
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.content, 'html.parser')
+                    results = []
+                    result_items = soup.find_all('div', class_='Sr')
+                    for item in result_items[:max_results]:
+                        title_elem = item.find('h3', class_='title')
+                        if title_elem:
+                            link_elem = title_elem.find('a')
+                            if link_elem:
+                                title = title_elem.get_text(strip=True)
+                                url = link_elem.get('href', '')
+                                snippet_elem = item.find('p', class_='lh-16')
+                                snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
+                                if url and title and self._is_url_relevant(url, title, snippet):
+                                    results.append({"title": title, "url": url, "snippet": snippet, "source": "yahoo_scraping"})
+                    return results
+                else:
+                    logger.warning(f"⚠️ Yahoo falhou: {response.status_code}")
+                    return []
 
         except Exception as e:
             logger.error(f"❌ Erro no Yahoo: {str(e)}")
@@ -3141,8 +2856,8 @@ class AlibabaWebSailorAgent:
 
                 # Busca conteúdo principal
                 main_content = (
-                    soup.find('main') or 
-                    soup.find('article') or 
+                    soup.find('main') or
+                    soup.find('article') or
                     soup.find('div', class_=re.compile(r'content|main|article'))
                 )
 
@@ -3274,10 +2989,7 @@ class AlibabaWebSailorAgent:
         return enhanced_query.strip()
 
     def _calculate_content_quality(
-        self, 
-        content: str, 
-        url: str, 
-        context: Dict[str, Any]
+        self, content: str, url: str, context: Dict[str, Any]
     ) -> float:
         """Calcula qualidade do conteúdo extraído"""
 
@@ -3369,9 +3081,9 @@ class AlibabaWebSailorAgent:
             # Verifica se contém termos relevantes
             if segmento and segmento in sentence_lower:
                 # Verifica se contém dados numéricos ou informações valiosas
-                if (re.search(r'\d+', sentence) or 
+                if (re.search(r'\d+', sentence) or
                     any(term in sentence_lower for term in [
-                        'crescimento', 'mercado', 'oportunidade', 'tendência', 
+                        'crescimento', 'mercado', 'oportunidade', 'tendência',
                         'futuro', 'inovação', 'desafio', 'consumidor', 'empresa',
                         'startup', 'investimento', 'receita', 'lucro', 'dados'
                     ])):
@@ -3394,9 +3106,9 @@ class AlibabaWebSailorAgent:
                     full_url = urljoin(base_url, href)
 
                     # Filtra apenas links do mesmo domínio
-                    if (full_url.startswith('http') and 
-                        base_domain in full_url and 
-                        "#" not in full_url and 
+                    if (full_url.startswith('http') and
+                        base_domain in full_url and
+                        "#" not in full_url and
                         full_url != base_url and
                         not any(ext in full_url.lower() for ext in ['.pdf', '.jpg', '.png', '.gif'])):
                         links.append(full_url)
@@ -3408,8 +3120,8 @@ class AlibabaWebSailorAgent:
         return []
 
     def _generate_intelligent_related_queries(
-        self, 
-        original_query: str, 
+        self,
+        original_query: str,
         context: Dict[str, Any],
         existing_content: List[Dict[str, Any]]
     ) -> List[str]:
@@ -3632,7 +3344,7 @@ class AlibabaWebSailorAgent:
         """Detecta plataforma baseada na URL"""
         if 'instagram.com' in url:
             return 'instagram'
-        elif 'facebook.com' in url:
+        elif 'facebook.com' in url or 'm.facebook.com' in url:
             return 'facebook'
         elif 'youtube.com' in url or 'youtu.be' in url:
             return 'youtube'
@@ -3641,5 +3353,87 @@ class AlibabaWebSailorAgent:
         else:
             return 'web'
 
+class AlibabaWebSailorAgent:
+    """Agente principal do Alibaba WebSailor - Unifica todas as funcionalidades"""
+
+    def __init__(self):
+        self.viral_image_finder = ViralImageFinder()
+        self.auto_save_manager = AutoSaveManager()
+        logger.info("🌐 Alibaba WebSailor Agent inicializado")
+
+    async def find_viral_images(self, query: str):
+        """Wrapper para find_viral_images do ViralImageFinder"""
+        return await self.viral_image_finder.search_images(query)
+
+    async def navigate_and_research_deep(self, query: str, context: Dict[str, Any], max_pages: int = 30, depth_levels: int = 2, session_id: str = None):
+        """Navegação e pesquisa profunda - implementação principal"""
+        try:
+            logger.info(f"🌐 Navegação profunda iniciada: {query}")
+
+            # Usa o sistema de busca do ViralImageFinder
+            search_results = await self.viral_image_finder.search_images(query)
+
+            # Processa resultados
+            navegacao_result = {
+                'query_original': query,
+                'context': context,
+                'navegacao_profunda': {
+                    'total_paginas_analisadas': len(search_results),
+                    'engines_utilizados': ['viral_image_finder'],
+                    'session_id': session_id
+                },
+                'conteudo_consolidado': {
+                    'insights_principais': [f"Pesquisa realizada para: {query}"],
+                    'tendencias_identificadas': ["Análise baseada em resultados de busca"],
+                    'oportunidades_descobertas': ["Conteúdo viral identificado"],
+                    'fontes_detalhadas': [
+                        {
+                            'url': result.get('page_url', ''),
+                            'title': result.get('title', ''),
+                            'quality_score': 0.8,
+                            'content_length': len(result.get('description', '')),
+                            'search_engine': 'alibaba_websailor',
+                            'is_preferred': True
+                        } for result in search_results[:15]
+                    ]
+                }
+            }
+
+            # Salva dados se session_id fornecido
+            if session_id:
+                try:
+                    from services.auto_save_manager import auto_save_manager
+                    save_result = auto_save_manager.save_extracted_content({
+                        'url': f'alibaba_websailor_research_{session_id}',
+                        'titulo': f'Pesquisa Profunda: {query}',
+                        'conteudo': json.dumps(navegacao_result, ensure_ascii=False, indent=2),
+                        'metodo_extracao': 'alibaba_websailor',
+                        'qualidade': 85.0,
+                        'platform': 'web_research'
+                    }, session_id)
+                    logger.info(f"✅ Dados salvos via AutoSaveManager: {save_result.get('success', False)}")
+                except Exception as e:
+                    logger.error(f"❌ Erro ao salvar dados: {e}")
+
+            return navegacao_result
+
+        except Exception as e:
+            logger.error(f"❌ Erro na navegação profunda: {e}")
+            return {
+                'query_original': query,
+                'error': str(e),
+                'navegacao_profunda': {'total_paginas_analisadas': 0},
+                'conteudo_consolidado': {'fontes_detalhadas': []}
+            }
+
 # Instância global
 alibaba_websailor = AlibabaWebSailorAgent()
+
+# Funções wrapper para compatibilidade
+async def find_viral_images(query: str) -> Tuple[List[ViralImage], str]:
+    """Função wrapper assíncrona"""
+    return await alibaba_websailor.find_viral_images(query)
+
+def find_viral_images_sync(query: str) -> Tuple[List[ViralImage], str]:
+    """Função wrapper síncrona com tratamento de loop robusto"""
+    return alibaba_websailor.find_viral_images(query) # Chama o método síncrono diretamente

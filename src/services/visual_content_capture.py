@@ -74,124 +74,241 @@ class VisualContentCapture:
 
     def _try_google_images_extraction(self, post_url: str, filename: str, session_dir: Path) -> Dict[str, Any]:
         """
-        NOVO PROCEDIMENTO: Busca imagem no Google Images antes do screenshot
-        Implementa exatamente o procedimento descrito no anexo
+        PROCEDIMENTO PRIORITÁRIO: Busca imagem no Google Images
+        Implementa exatamente o procedimento descrito no anexo com melhorias
         """
         try:
-            logger.info(f"🔍 Tentando buscar imagem no Google Images para {post_url}")
+            logger.info(f"🔍 PRIORIDADE 1: Buscando imagem no Google Images para {post_url}")
             
-            # Prepara query para busca (remove protocolo para evitar problemas de encoding)
-            google_search_query = post_url.replace('https://', '').replace('http://', '')
+            # Prepara múltiplas queries para aumentar chance de sucesso
+            queries = [
+                post_url,  # URL completa
+                post_url.replace('https://', '').replace('http://', ''),  # Sem protocolo
+                f'"{post_url}"',  # Com aspas
+                f'site:instagram.com {post_url.split("/")[-2] if "/" in post_url else post_url}'  # Estratégia alternativa
+            ]
             
-            # Usa API Serper para buscar imagens
-            api_key = self._get_next_serper_key()
-            if not api_key:
-                logger.warning("⚠️ Nenhuma chave Serper disponível para busca de imagens")
-                return {'success': False, 'error': 'No Serper API key'}
-            
-            import requests
-            
-            url = "https://google.serper.dev/images"
-            payload = {
-                "q": google_search_query,
-                "num": 1,  # Busca apenas a primeira imagem
-                "safe": "off",
-                "gl": "br",  # Localização Brasil
-                "hl": "pt-br",  # Idioma Português
-                "imgSize": "large",  # Tamanho grande para melhor qualidade
-                "imgType": "photo"  # Tipo de imagem
-            }
-            headers = {'X-API-KEY': api_key, 'Content-Type': 'application/json'}
-            
-            response = requests.post(url, json=payload, headers=headers, timeout=30)
-            
-            if response.status_code == 200:
-                data = response.json()
-                # Extrai a URL da primeira imagem encontrada
-                images = data.get('images', [])
-                if images:
-                    first_image = images[0]
-                    image_url = first_image.get('imageUrl')
+            for i, query in enumerate(queries, 1):
+                logger.info(f"🔍 Tentativa {i}/{len(queries)} com query: {query}")
+                
+                # Usa API Serper para buscar imagens
+                api_key = self._get_next_serper_key()
+                if not api_key:
+                    logger.warning("⚠️ Nenhuma chave Serper disponível")
+                    continue
+                
+                import requests
+                
+                url = "https://google.serper.dev/images"
+                payload = {
+                    "q": query,
+                    "num": 3,  # Busca 3 imagens para ter alternativas
+                    "safe": "off",
+                    "gl": "br",
+                    "hl": "pt-br",
+                    "imgSize": "large",
+                    "imgType": "photo"
+                }
+                headers = {'X-API-KEY': api_key, 'Content-Type': 'application/json'}
+                
+                try:
+                    response = requests.post(url, json=payload, headers=headers, timeout=30)
                     
-                    if image_url:
-                        logger.info(f"✅ Imagem encontrada via Google Images: {image_url}")
+                    if response.status_code == 200:
+                        data = response.json()
+                        images = data.get('images', [])
                         
-                        # Tenta baixar a imagem
-                        success = self._download_image_from_url(image_url, filename, session_dir)
-                        if success:
-                            screenshot_path = session_dir / f"{filename}.jpg"  # Google Images geralmente retorna JPG
-                            if not screenshot_path.exists():
-                                screenshot_path = session_dir / f"{filename}.png"  # Fallback para PNG
+                        logger.info(f"📊 Google Images retornou {len(images)} imagens para query {i}")
+                        
+                        # Tenta baixar cada imagem até conseguir uma
+                        for j, image in enumerate(images, 1):
+                            image_url = image.get('imageUrl')
+                            if not image_url:
+                                continue
                                 
-                            if screenshot_path.exists():
-                                return {
-                                    'success': True,
-                                    'url': post_url,
-                                    'image_source': image_url,
-                                    'title': f"Imagem extraída do Google Images",
-                                    'description': f"Imagem encontrada via busca no Google Images",
-                                    'filename': screenshot_path.name,
-                                    'filepath': str(screenshot_path),
-                                    'filesize': screenshot_path.stat().st_size,
-                                    'method': 'google_images_search',
-                                    'timestamp': datetime.now().isoformat()
-                                }
-                        else:
-                            logger.warning("⚠️ Download da imagem via Google Images falhou")
+                            logger.info(f"⬇️ Tentando baixar imagem {j}: {image_url[:100]}...")
+                            
+                            success = self._download_image_from_url(image_url, f"{filename}_{i}_{j}", session_dir)
+                            if success:
+                                # Procura o arquivo baixado
+                                for ext in ['.jpg', '.png', '.webp', '.jpeg']:
+                                    screenshot_path = session_dir / f"{filename}_{i}_{j}{ext}"
+                                    if screenshot_path.exists():
+                                        logger.info(f"✅ SUCESSO: Imagem baixada via Google Images: {screenshot_path}")
+                                        
+                                        # Renomeia para nome padrão
+                                        final_path = session_dir / f"{filename}{ext}"
+                                        screenshot_path.rename(final_path)
+                                        
+                                        return {
+                                            'success': True,
+                                            'url': post_url,
+                                            'image_source': image_url,
+                                            'title': f"Imagem extraída do Google Images (Query {i})",
+                                            'description': f"Imagem encontrada via busca no Google Images",
+                                            'filename': final_path.name,
+                                            'filepath': str(final_path),
+                                            'filesize': final_path.stat().st_size,
+                                            'method': 'google_images_search',
+                                            'query_used': query,
+                                            'image_position': j,
+                                            'timestamp': datetime.now().isoformat()
+                                        }
+                            
+                            # Rate limiting entre tentativas
+                            await asyncio.sleep(0.5)
+                    
+                    elif response.status_code == 429:
+                        logger.warning("⚠️ Rate limit Serper - aguardando 2s...")
+                        await asyncio.sleep(2)
+                        continue
                     else:
-                        logger.warning("⚠️ Nenhuma URL de imagem encontrada na resposta do Google Images")
-                else:
-                    logger.warning("⚠️ Nenhuma imagem encontrada na resposta do Google Images")
-            elif response.status_code == 429:
-                logger.warning("⚠️ Rate limit Serper - continuando com screenshot normal")
-            else:
-                logger.warning(f"⚠️ Resposta inesperada do Google Images API: {response.status_code}")
+                        logger.warning(f"⚠️ Status {response.status_code} para query {i}")
+                
+                except requests.RequestException as e:
+                    logger.warning(f"⚠️ Erro de rede na query {i}: {e}")
+                    continue
+                
+                # Pausa entre queries
+                await asyncio.sleep(1)
+            
+            logger.warning("⚠️ Todas as tentativas do Google Images falharam")
             
         except Exception as e:
-            logger.error(f"❌ Erro ao tentar buscar imagem no Google Images: {str(e)}")
+            logger.error(f"❌ Erro crítico no Google Images: {str(e)}")
         
-        return {'success': False, 'error': 'Google Images search failed'}
+        return {'success': False, 'error': 'Google Images search failed after all attempts'}
 
     def _download_image_from_url(self, image_url: str, filename: str, session_dir: Path) -> bool:
-        """Baixa imagem da URL encontrada no Google Images"""
-        try:
-            import requests
-            
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-            
-            response = requests.get(image_url, headers=headers, timeout=30, stream=True)
-            response.raise_for_status()
-            
-            # Determina extensão baseada no Content-Type
-            content_type = response.headers.get('content-type', '')
-            if 'jpeg' in content_type or 'jpg' in content_type:
-                extension = '.jpg'
-            elif 'png' in content_type:
-                extension = '.png'
-            elif 'webp' in content_type:
-                extension = '.webp'
-            else:
-                extension = '.jpg'  # Default
-            
-            image_path = session_dir / f"{filename}{extension}"
-            
-            with open(image_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            
-            # Verifica se arquivo foi criado e tem tamanho mínimo
-            if image_path.exists() and image_path.stat().st_size > 5000:  # Mínimo 5KB
-                logger.info(f"✅ Imagem baixada com sucesso: {image_path}")
-                return True
-            else:
-                logger.warning(f"⚠️ Imagem baixada é muito pequena ou inválida")
-                return False
+        """Baixa imagem da URL com validação robusta e múltiplas tentativas"""
+        max_attempts = 3
+        
+        for attempt in range(max_attempts):
+            try:
+                logger.info(f"⬇️ Tentativa {attempt + 1}/{max_attempts} de download: {image_url[:100]}...")
                 
-        except Exception as e:
-            logger.error(f"❌ Erro ao baixar imagem: {str(e)}")
-            return False
+                import requests
+                
+                # Headers mais robustos para evitar bloqueios
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                    'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Cache-Control': 'no-cache',
+                    'Pragma': 'no-cache',
+                    'Sec-Fetch-Dest': 'image',
+                    'Sec-Fetch-Mode': 'no-cors',
+                    'Sec-Fetch-Site': 'cross-site'
+                }
+                
+                # Timeout progressivo
+                timeout = 15 + (attempt * 10)  # 15, 25, 35 segundos
+                
+                response = requests.get(
+                    image_url, 
+                    headers=headers, 
+                    timeout=timeout, 
+                    stream=True,
+                    allow_redirects=True,
+                    verify=True
+                )
+                
+                response.raise_for_status()
+                
+                # Verifica Content-Type
+                content_type = response.headers.get('content-type', '').lower()
+                logger.info(f"📄 Content-Type: {content_type}")
+                
+                # Determina extensão baseada no Content-Type e URL
+                extension = '.jpg'  # Default
+                if 'jpeg' in content_type or 'jpg' in content_type:
+                    extension = '.jpg'
+                elif 'png' in content_type:
+                    extension = '.png'
+                elif 'webp' in content_type:
+                    extension = '.webp'
+                elif 'gif' in content_type:
+                    extension = '.gif'
+                elif image_url.lower().endswith('.png'):
+                    extension = '.png'
+                elif image_url.lower().endswith('.webp'):
+                    extension = '.webp'
+                elif image_url.lower().endswith('.gif'):
+                    extension = '.gif'
+                
+                image_path = session_dir / f"{filename}{extension}"
+                
+                # Download com validação de tamanho
+                total_size = 0
+                with open(image_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:  # Filter out keep-alive chunks
+                            f.write(chunk)
+                            total_size += len(chunk)
+                            
+                            # Limite de 50MB para evitar downloads gigantes
+                            if total_size > 50 * 1024 * 1024:
+                                logger.warning("⚠️ Arquivo muito grande (>50MB), abortando")
+                                raise Exception("Arquivo muito grande")
+                
+                # Validação final
+                if image_path.exists():
+                    file_size = image_path.stat().st_size
+                    logger.info(f"📊 Arquivo baixado: {file_size:,} bytes")
+                    
+                    # Verifica tamanho mínimo (3KB) e máximo (50MB)
+                    if 3000 <= file_size <= 50 * 1024 * 1024:
+                        # Validação adicional: tenta ler o início do arquivo para verificar se é uma imagem
+                        try:
+                            with open(image_path, 'rb') as f:
+                                header = f.read(50)
+                                
+                            # Assinaturas de arquivos de imagem
+                            image_signatures = [
+                                b'\xff\xd8\xff',  # JPEG
+                                b'\x89PNG\r\n\x1a\n',  # PNG
+                                b'GIF8',  # GIF
+                                b'RIFF',  # WebP (starts with RIFF)
+                                b'<svg',  # SVG
+                            ]
+                            
+                            is_valid_image = any(header.startswith(sig) for sig in image_signatures)
+                            
+                            if is_valid_image:
+                                logger.info(f"✅ DOWNLOAD SUCESSO: {image_path} ({file_size:,} bytes)")
+                                return True
+                            else:
+                                logger.warning(f"⚠️ Arquivo não parece ser uma imagem válida")
+                                image_path.unlink()  # Remove arquivo inválido
+                        except Exception as e:
+                            logger.warning(f"⚠️ Erro na validação da imagem: {e}")
+                            
+                    else:
+                        logger.warning(f"⚠️ Tamanho inválido: {file_size} bytes (mín: 3KB, máx: 50MB)")
+                        if image_path.exists():
+                            image_path.unlink()
+                
+            except requests.exceptions.Timeout:
+                logger.warning(f"⏰ Timeout na tentativa {attempt + 1}")
+            except requests.exceptions.ConnectionError:
+                logger.warning(f"🌐 Erro de conexão na tentativa {attempt + 1}")
+            except requests.exceptions.HTTPError as e:
+                logger.warning(f"📡 Erro HTTP {e.response.status_code} na tentativa {attempt + 1}")
+                # Se for 404, 403, ou similar, não vale a pena tentar novamente
+                if e.response.status_code in [404, 403, 401, 410]:
+                    break
+            except Exception as e:
+                logger.warning(f"❌ Erro na tentativa {attempt + 1}: {str(e)}")
+            
+            # Pausa entre tentativas (backoff exponencial)
+            if attempt < max_attempts - 1:
+                sleep_time = 2 ** attempt  # 1s, 2s, 4s
+                logger.info(f"⏳ Aguardando {sleep_time}s antes da próxima tentativa...")
+                time.sleep(sleep_time)
+        
+        logger.error(f"❌ FALHA TOTAL: Não foi possível baixar a imagem após {max_attempts} tentativas")
+        return False
 
     def _setup_driver(self) -> webdriver.Chrome:
         """Configura o driver do Chrome em modo headless"""
@@ -260,14 +377,17 @@ class VisualContentCapture:
             raise
 
     def _take_screenshot(self, url: str, filename: str, session_dir: Path) -> Dict[str, Any]:
-        """Captura screenshot de uma URL específica com fallback via Google Images"""
+        """Captura screenshot com PRIORIDADE para Google Images"""
         
-        # NOVO PROCEDIMENTO: Busca no Google Images para Instagram/Facebook
-        if 'instagram.com' in url or 'facebook.com' in url:
-            google_image_result = self._try_google_images_extraction(url, filename, session_dir)
-            if google_image_result and google_image_result.get('success'):
-                logger.info(f"✅ Imagem extraída via Google Images: {url}")
-                return google_image_result
+        # PRIORIDADE 1: SEMPRE tenta Google Images primeiro (para qualquer URL)
+        logger.info(f"🎯 ESTRATÉGIA PRIORITÁRIA: Google Images para {url}")
+        google_image_result = self._try_google_images_extraction(url, filename, session_dir)
+        if google_image_result and google_image_result.get('success'):
+            logger.info(f"✅ SUCESSO VIA GOOGLE IMAGES: {url}")
+            return google_image_result
+        
+        # PRIORIDADE 2: Screenshot tradicional apenas se Google Images falhar
+        logger.info(f"🔄 FALLBACK: Screenshot tradicional para {url}")
         
         try:
             logger.info(f"📸 Capturando screenshot: {url}")

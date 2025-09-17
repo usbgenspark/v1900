@@ -112,16 +112,24 @@ def start_step1_collection():
 
                 try:
                     logger.info(f"🔍 Executando busca massiva - Sessão: {session_id}")
-                    # Executa busca massiva real com verificação de método
+                    # Executa busca massiva real com verificação de método e TIMEOUT
                     real_search_orch = services['real_search_orchestrator']
                     if hasattr(real_search_orch, 'execute_massive_real_search'):
-                        search_results = loop.run_until_complete(
-                            real_search_orch.execute_massive_real_search(
-                                query=query,
-                                context=context,
-                                session_id=session_id
+                        # Adiciona timeout de 5 minutos para evitar loop infinito
+                        try:
+                            search_results = loop.run_until_complete(
+                                asyncio.wait_for(
+                                    real_search_orch.execute_massive_real_search(
+                                        query=query,
+                                        context=context,
+                                        session_id=session_id
+                                    ),
+                                    timeout=300  # 5 minutos
+                                )
                             )
-                        )
+                        except asyncio.TimeoutError:
+                            logger.error("❌ Timeout na busca massiva - parando para evitar loop")
+                            search_results = {'web_results': [], 'social_results': [], 'youtube_results': []}
                     else:
                         logger.error("❌ Método execute_massive_real_search não encontrado")
                         search_results = {'web_results': [], 'social_results': [], 'youtube_results': []}

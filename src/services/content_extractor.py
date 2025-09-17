@@ -14,6 +14,7 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 import re
 import hashlib # Import hashlib for caching
+from datetime import datetime # Import datetime for timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -65,13 +66,14 @@ class ContentExtractor:
         logger.info("Content Extractor inicializado com múltiplas estratégias")
 
 
-    def extract_content(self, url: str, timeout: int = 30) -> Dict[str, Any]:
+    def extract_content(self, url: str, timeout: int = 30, session_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Extrai conteúdo de uma URL usando múltiplas estratégias com fallback
 
         Args:
             url: URL para extrair conteúdo
             timeout: Timeout em segundos
+            session_id: Identificador da sessão para rastreamento
 
         Returns:
             dict: Conteúdo extraído com metadados
@@ -96,7 +98,19 @@ class ContentExtractor:
             logger.info(f"🎯 Detectada rede social: {social_platform} - Usando MCP especializado")
             mcp_result = self._extract_social_content_mcp(clean_url, social_platform)
             if mcp_result and mcp_result.get('success'):
-                return mcp_result
+                # Se MCP for bem sucedido, tenta salvar e retorna
+                if mcp_result.get('content'):
+                    result_for_save = {
+                        "content": mcp_result["content"],
+                        "url": clean_url,
+                        "method_used": f"mcp_{social_platform}",
+                        "success": True
+                    }
+                    # Chama save_extracted_content aqui se necessário, com session_id
+                    # Exemplo: auto_save_manager.save_extracted_content(..., session_id=session_id)
+                    return result_for_save
+                else:
+                    return self._create_error_result(f"MCP para {social_platform} retornou sucesso mas sem conteúdo", time.time() - start_time)
             logger.warning(f"⚠️ MCP {social_platform} falhou, continuando com estratégias normais")
 
         # Verifica cache primeiro
@@ -111,9 +125,12 @@ class ContentExtractor:
         if self.youtube_pattern.search(clean_url):
             logger.info(f"▶️ URL do YouTube detectada: {clean_url}")
             content = self._extract_youtube_content(clean_url, self.max_retries)
+            method_used = "youtube_strategy"
         else:
             # Para URLs normais, usa estratégias padrão
             content = self._extract_regular_content(clean_url, self.max_retries)
+            method_used = "regular_strategy"
+
 
         if content:
             metadata = self.extract_metadata(clean_url)
@@ -123,7 +140,8 @@ class ContentExtractor:
                 'metadata': metadata,
                 'success': True,
                 'error': None,
-                'processing_time': time.time() - start_time
+                'processing_time': time.time() - start_time,
+                'method_used': method_used # Armazena o método usado
             }
             self._cache_result(cache_key, result)
             return result
@@ -738,7 +756,7 @@ STATUS: Fallback de emergência ativado
             'processing_time': processing_time if processing_time is not None else 0.0
         }
 
-    def extract_content_from_url(self, url: str, use_readability: bool = True) -> tuple[Optional[str], Optional[str]]:
+    def extract_content_from_url(self, url: str, use_readability: bool = True, session_id: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
         """Extrai conteúdo de uma URL usando múltiplas estratégias de fallback com validação rigorosa"""
 
         if not self._is_valid_url(url):
@@ -771,6 +789,15 @@ STATUS: Fallback de emergência ativado
                     continue
 
                 logger.info(f"✅ Sucesso com {strategy_name}: {len(content)} caracteres (qualidade: {quality_score:.1f}%)")
+                # Aqui, se um AutoSaveManager estiver disponível, você chamaria save_extracted_content
+                # Exemplo:
+                # if 'auto_save_manager' in locals() and auto_save_manager is not None:
+                #     auto_save_manager.save_extracted_content(
+                #         content_data={"content": content, "url": url, ...},
+                #         source_info={"url": url, ...},
+                #         session_id=session_id
+                #     )
+
                 return content, strategy_name
 
             except Exception as e:
