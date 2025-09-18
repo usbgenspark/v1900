@@ -83,7 +83,7 @@ def create_app():
     from routes.enhanced_analysis import enhanced_analysis_bp
 
     logger.info("🔍 Importando forensic_analysis...")
-    from routes.forensic_analysis import forensic_bp
+    # from routes.forensic_analysis import forensic_bp  # COMENTADO - módulo não existe
 
     logger.info("📁 Importando files...")
     from routes.files import files_bp
@@ -95,13 +95,13 @@ def create_app():
     from routes.user import user_bp
 
     logger.info("🖥️ Importando monitoring...")
-    from routes.monitoring import monitoring_bp
+    # from routes.monitoring import monitoring_bp  # COMENTADO - módulo não existe
 
     logger.info("📄 Importando html_report_generator...")
-    from routes.html_report_generator import html_report_bp
+    # from routes.html_report_generator import html_report_bp  # COMENTADO - módulo não existe
 
     logger.info("🔗 Importando mcp...")
-    from routes.mcp import mcp_bp
+    # from routes.mcp import mcp_bp  # COMENTADO - módulo não existe
 
     logger.info("⚡ Importando enhanced_workflow...")
     from routes.enhanced_workflow import enhanced_workflow_bp
@@ -110,14 +110,14 @@ def create_app():
 
     app.register_blueprint(analysis_bp, url_prefix='/api')
     app.register_blueprint(enhanced_analysis_bp, url_prefix='/enhanced')
-    app.register_blueprint(forensic_bp, url_prefix='/forensic')
+    # app.register_blueprint(forensic_bp, url_prefix='/forensic')  # COMENTADO - módulo não existe
     app.register_blueprint(files_bp, url_prefix='/files')
     app.register_blueprint(progress_bp, url_prefix='/api')
     app.register_blueprint(user_bp, url_prefix='/user')
-    app.register_blueprint(monitoring_bp, url_prefix='/monitoring')
+    # app.register_blueprint(monitoring_bp, url_prefix='/monitoring')  # COMENTADO - módulo não existe
     # app.register_blueprint(pdf_bp, url_prefix='/pdf')  # REMOVIDO - não existe
-    app.register_blueprint(html_report_bp, url_prefix='/html_report')
-    app.register_blueprint(mcp_bp, url_prefix='/mcp')
+    # app.register_blueprint(html_report_bp, url_prefix='/html_report')  # COMENTADO - módulo não existe
+    # app.register_blueprint(mcp_bp, url_prefix='/mcp')  # COMENTADO - módulo não existe
     app.register_blueprint(enhanced_workflow_bp, url_prefix='/api')
 
     @app.route('/')
