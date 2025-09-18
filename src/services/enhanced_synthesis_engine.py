@@ -43,6 +43,9 @@ class EnhancedSynthesisEngine:
 
 Sua missão é estudar profundamente o relatório de coleta fornecido e criar uma síntese estruturada, acionável e baseada 100% em dados reais.
 
+## TEMPO MÍNIMO DE ESPECIALIZAÇÃO: 5 MINUTOS
+Você deve dedicar NO MÍNIMO 5 minutos se especializando no tema fornecido, fazendo múltiplas buscas e análises profundas antes de gerar a síntese final.
+
 ## INSTRUÇÕES CRÍTICAS:
 
 1. **USE A FERRAMENTA DE BUSCA ATIVAMENTE**: Sempre que encontrar um tópico que precisa de aprofundamento, dados mais recentes, ou validação, use a função google_search.
@@ -231,17 +234,20 @@ DADOS PARA ANÁLISE:
             # 4. Seleciona prompt baseado no tipo
             base_prompt = self.synthesis_prompts.get(synthesis_type, self.synthesis_prompts['master_synthesis'])
             
-            # 5. Executa síntese com busca ativa
-            logger.info("🔍 Executando síntese com busca ativa...")
+            # 5. Executa síntese com busca ativa e especialização profunda
+            logger.info("🔍 Executando síntese com busca ativa e especialização de 5+ minutos...")
             
             if not self.ai_manager:
                 raise Exception("AI Manager não disponível")
             
+            # Forçar uso do modelo qwen/qwen3-coder:free para especialização profunda
             synthesis_result = await self.ai_manager.generate_with_active_search(
                 prompt=base_prompt,
                 context=full_context,
                 session_id=session_id,
-                max_search_iterations=5
+                max_search_iterations=8,  # Aumentado para mais buscas
+                preferred_model="qwen",  # Usar modelo qwen3-coder
+                min_processing_time=300  # 5 minutos mínimos
             )
             
             # 6. Processa e valida resultado
@@ -278,12 +284,20 @@ DADOS PARA ANÁLISE:
     def _load_collection_report(self, session_id: str) -> Optional[str]:
         """Carrega relatório de coleta"""
         try:
-            report_path = Path(f"analyses_data/{session_id}/relatorio_coleta.md")
-            if report_path.exists():
-                with open(report_path, 'r', encoding='utf-8') as f:
-                    return f.read()
+            # Tentar múltiplos caminhos possíveis
+            possible_paths = [
+                Path(f"analyses_data/{session_id}/relatorio_coleta.md"),
+                Path(f"../analyses_data/{session_id}/relatorio_coleta.md"),
+                Path(f"../../analyses_data/{session_id}/relatorio_coleta.md")
+            ]
             
-            logger.warning(f"⚠️ Relatório de coleta não encontrado: {report_path}")
+            for report_path in possible_paths:
+                if report_path.exists():
+                    logger.info(f"📄 Relatório encontrado em: {report_path}")
+                    with open(report_path, 'r', encoding='utf-8') as f:
+                        return f.read()
+            
+            logger.warning(f"⚠️ Relatório de coleta não encontrado em nenhum caminho para sessão: {session_id}")
             return None
             
         except Exception as e:

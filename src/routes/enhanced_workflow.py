@@ -155,14 +155,31 @@ def start_step1_collection():
                         logger.error(f"❌ Erro durante as operações assíncronas da Etapa 1: {e}")
                         # Continua mesmo com erro para tentar gerar o relatório com o que foi coletado
 
+                    # INTEGRAÇÃO DE DADOS VIRAIS
+                    logger.info("🔥 Integrando dados virais para segunda etapa...")
+                    try:
+                        from services.viral_integration_service import ViralIntegrationService
+                        viral_integration = ViralIntegrationService(session_id)
+                        integration_result = viral_integration.process_and_integrate()
+                        
+                        if integration_result.get("success"):
+                            logger.info(f"✅ Integração viral concluída: {integration_result['total_content_pieces']} peças processadas")
+                        else:
+                            logger.warning("⚠️ Integração viral parcialmente concluída")
+                    except Exception as e:
+                        logger.error(f"❌ Erro na integração viral: {e}")
+
                     # GERA RELATÓRIO VIRAL AUTOMATICAMENTE
                     logger.info("🔥 Gerando relatório viral automático...")
-                    viral_report_generator = services['ViralReportGenerator']()
-                    viral_report_success = viral_report_generator.generate_viral_report(session_id)
-                    if viral_report_success:
-                        logger.info("✅ Relatório viral gerado e salvo automaticamente")
-                    else:
-                        logger.warning("⚠️ Falha ao gerar relatório viral automático")
+                    try:
+                        viral_report_generator = services['ViralReportGenerator']()
+                        viral_report_success = viral_report_generator.generate_viral_report(session_id)
+                        if viral_report_success:
+                            logger.info("✅ Relatório viral gerado e salvo automaticamente")
+                        else:
+                            logger.warning("⚠️ Falha ao gerar relatório viral automático")
+                    except Exception as e:
+                        logger.error(f"❌ Erro ao gerar relatório viral: {e}")
 
                     # GERA CONSOLIDAÇÃO FINAL COMPLETA
                     logger.info("🔗 CONSOLIDANDO TODOS OS DADOS DA ETAPA 1...")

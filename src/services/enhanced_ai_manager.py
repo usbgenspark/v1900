@@ -11,6 +11,10 @@ import asyncio
 import json
 from typing import Dict, List, Optional, Any, Union
 from datetime import datetime
+from dotenv import load_dotenv
+
+# Carregar variáveis de ambiente
+load_dotenv()
 
 # Imports condicionais
 try:
@@ -170,15 +174,23 @@ class EnhancedAIManager:
         prompt: str,
         context: str = "",
         session_id: str = None,
-        max_search_iterations: int = 3
+        max_search_iterations: int = 3,
+        preferred_model: str = None,
+        min_processing_time: int = 0
     ) -> str:
         """
         Gera conteúdo com busca ativa - IA pode buscar informações online
         """
-        logger.info("🔍 Iniciando geração com busca ativa")
+        logger.info(f"🔍 Iniciando geração com busca ativa (min_time: {min_processing_time}s)")
+        
+        # Registrar tempo de início para garantir tempo mínimo
+        start_time = datetime.now()
 
-        # Tenta Qwen/OpenRouter primeiro para geração com busca ativa
-        if "openrouter" in self.providers and self.providers["openrouter"]["available"]:
+        # Usar modelo preferido se especificado
+        if preferred_model == "qwen" and "openrouter" in self.providers and self.providers["openrouter"]["available"]:
+            provider_name = "openrouter"
+            logger.info(f"🤖 Usando {provider_name} com modelo qwen3-coder (especialização profunda)")
+        elif "openrouter" in self.providers and self.providers["openrouter"]["available"]:
              provider_name = "openrouter"
              logger.info(f"🤖 Usando {provider_name} com busca ativa (prioritário)")
         else:
@@ -299,6 +311,14 @@ IMPORTANTE: Gere uma análise completa mesmo sem ferramentas de busca, baseando-
 
                     logger.info(f"✅ Geração com busca ativa concluída em {iteration} iterações")
                     logger.info(f"🔍 {len(conversation_history)} buscas realizadas")
+
+                    # Garantir tempo mínimo de processamento se especificado
+                    if min_processing_time > 0:
+                        elapsed_time = (datetime.now() - start_time).total_seconds()
+                        if elapsed_time < min_processing_time:
+                            remaining_time = min_processing_time - elapsed_time
+                            logger.info(f"⏱️ Aguardando {remaining_time:.1f}s para completar tempo mínimo de especialização")
+                            await asyncio.sleep(remaining_time)
 
                     return final_response
 

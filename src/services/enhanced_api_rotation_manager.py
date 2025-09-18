@@ -82,6 +82,7 @@ class EnhancedAPIRotationManager:
         # Definir cadeias de fallback (cada grupo é uma prioridade)
         self.fallback_chains = {
             'ai_models': [['qwen'], ['gemini'], ['openai'], ['groq'], ['deepseek']],
+            'ai_generation': [['qwen'], ['gemini'], ['openai'], ['groq'], ['deepseek']],
             'search': [['jina'], ['exa'], ['serper'], ['serpapi'], ['firecrawl'], ['tavily'], ['apify']],
             'social_insights': [['supadata'], ['apify'], ['serper'], ['serpapi'], ['firecrawl'], ['tavily']],
             'web_scraping': [['firecrawl'], ['apify'], ['scrapingant'], ['jina'], ['serper'], ['serpapi']],
@@ -550,6 +551,30 @@ class EnhancedAPIRotationManager:
         
         # Se falhou, tentar fallback
         return self.get_fallback_api(service_type)
+    
+    def get_fallback_model(self, model_name: str) -> tuple[str, Optional[APIEndpoint]]:
+        """
+        Método de compatibilidade para get_fallback_model
+        Retorna tupla (model_name, api_endpoint)
+        """
+        # Mapear nomes de modelos para tipos de serviço
+        model_to_service = {
+            'qwen': 'ai_generation',
+            'gpt': 'ai_generation', 
+            'claude': 'ai_generation',
+            'gemini': 'ai_generation',
+            'llama': 'ai_generation'
+        }
+        
+        service_type = model_to_service.get(model_name, 'ai_generation')
+        api = self.get_api_with_fallback(service_type)
+        
+        if api:
+            logger.info(f"✅ Fallback model encontrado: {model_name} via {api.name}")
+            return model_name, api
+        else:
+            logger.warning(f"⚠️ Nenhuma API disponível para {model_name}")
+            return model_name, None
 
     def get_active_api_by_type(self, service_type: str) -> Optional[APIEndpoint]:
         """

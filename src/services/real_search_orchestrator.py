@@ -1126,8 +1126,25 @@ class RealSearchOrchestrator:
             chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--window-size=1920,1080")
             chrome_options.add_argument("--disable-gpu")
+            chrome_options.add_argument("--disable-web-security")
+            chrome_options.add_argument("--allow-running-insecure-content")
+            chrome_options.add_argument("--disable-extensions")
+            
+            # Usar Chrome instalado diretamente
+            chrome_options.binary_location = "/usr/bin/google-chrome-stable"
 
-            service = Service(ChromeDriverManager().install())
+            try:
+                # Usar chromedriver instalado diretamente
+                service = Service("/usr/bin/chromedriver")
+                logger.info("✅ Usando chromedriver instalado do sistema")
+            except Exception as e:
+                logger.warning(f"Chromedriver do sistema falhou: {e}. Tentando ChromeDriverManager...")
+                try:
+                    service = Service(ChromeDriverManager().install())
+                except Exception as e2:
+                    logger.error(f"ChromeDriverManager também falhou: {e2}")
+                    raise Exception("Não foi possível configurar chromedriver")
+            
             driver = webdriver.Chrome(service=service, options=chrome_options)
 
             # Cria diretório para screenshots
