@@ -23,10 +23,16 @@ try:
     from services.visceral_leads_engineer import VisceralLeadsEngineer
     HAS_ENHANCED_MODULES = True
 except ImportError as e:
+    # Moved logger initialization before its usage
+    logger = logging.getLogger(__name__)
     logger.warning(f"Módulos aprimorados não encontrados: {e}")
     HAS_ENHANCED_MODULES = False
 
-logger = logging.getLogger(__name__)
+# Initialize logger here if not already initialized in the except block
+if 'logger' not in locals():
+    logger = logging.getLogger(__name__)
+
+logger.info("🚀 ARQV30 Enhanced v3.0 - Processador de Módulos Iniciado")
 
 class EnhancedModuleProcessor:
     """Processador aprimorado de módulos"""
@@ -202,26 +208,29 @@ class EnhancedModuleProcessor:
 
                 # Verifica se é o módulo especializado CPL
                 if module_name == 'cpl_completo':
-                    # CORREÇÃO 2: Chamar a função com o nome correto e argumentos ajustados
-                    # Gera o módulo CPL especializado
-                    cpl_content = await create_devastating_cpl_protocol(
-                        sintese_master=base_data.get('sintese_master', {}),
-                        avatar_data=base_data.get('avatar_data', {}),
-                        contexto_estrategico=base_data.get('contexto_estrategico', {}),
-                        dados_web=base_data.get('dados_web', {}),
-                        session_id=session_id # session_id passado como keyword argument
-                    )
-                    
-                    # Salva conteúdo do módulo CPL em formato JSON e Markdown
-                    cpl_json_path = modules_dir / f"{module_name}.json"
-                    with open(cpl_json_path, 'w', encoding='utf-8') as f:
-                        json.dump(cpl_content, f, ensure_ascii=False, indent=2)
-                    
-                    # Cria versão Markdown do conteúdo CPL
-                    cpl_md_content = self._format_cpl_content_to_markdown(cpl_content)
-                    cpl_md_path = modules_dir / f"{module_name}.md"
-                    with open(cpl_md_path, 'w', encoding='utf-8') as f:
-                        f.write(cpl_md_content)
+                    # CORREÇÃO 2: Usar método direto do protocolo CPL
+                    try:
+                        from services.cpl_devastador_protocol import CPLDevastadorProtocol
+                        cpl_protocol = CPLDevastadorProtocol()
+
+                        # Corrigida a referência a 'context' para 'base_data' e corrigida a chave 'publico'
+                        tema = base_data.get('contexto_estrategico', {}).get('tema', 'Produto/Serviço')
+                        segmento = base_data.get('contexto_estrategico', {}).get('segmento', 'Mercado')
+                        publico_alvo = base_data.get('contexto_estrategico', {}).get('publico_alvo', 'Público-alvo')
+
+                        cpl_content = await cpl_protocol.executar_protocolo_completo(
+                            tema=tema,
+                            segmento=segmento,
+                            publico_alvo=publico_alvo,
+                            session_id=session_id
+                        )
+                    except ImportError:
+                        logger.warning("CPL Protocol não disponível, usando conteúdo padrão")
+                        cpl_content = {
+                            'titulo': 'Protocolo de CPLs Devastadores',
+                            'descricao': 'Módulo CPL em desenvolvimento',
+                            'status': 'fallback'
+                        }
                 else:
                     # Gera conteúdo do módulo padrão
                     if config.get('use_active_search', False):
@@ -265,6 +274,10 @@ class EnhancedModuleProcessor:
         """Carrega dados base da sessão"""
         try:
             session_dir = Path(f"analyses_data/{session_id}")
+            
+            if not session_dir.exists():
+                logger.warning(f"⚠️ Diretório da sessão não existe: {session_dir}")
+                return self._get_empty_base_data()
 
             # Carrega sínteses
             synthesis_data = {}
@@ -279,50 +292,17 @@ class EnhancedModuleProcessor:
             coleta_content = ""
             coleta_file = session_dir / "relatorio_coleta.md"
             if coleta_file.exists():
-                with open(coleta_file, 'r', encoding='utf-8') as f:
-                    coleta_content = f.read()
+                try:
+                    with open(coleta_file, 'r', encoding='utf-8') as f:
+                        coleta_content = f.read()
+                except Exception as e:
+                    logger.warning(f"⚠️ Erro ao ler relatório de coleta: {e}")
 
-            # Carrega dados específicos para o módulo CPL
-            sintese_master = {}
-            avatar_data = {}
-            contexto_estrategico = {}
-            dados_web = {}
-            
-            # Tenta carregar a síntese master
-            sintese_master_file = session_dir / "sintese_master_synthesis.json"
-            if sintese_master_file.exists():
-                try:
-                    with open(sintese_master_file, 'r', encoding='utf-8') as f:
-                        sintese_master = json.load(f)
-                except Exception as e:
-                    logger.warning(f"⚠️ Erro ao carregar síntese master: {e}")
-            
-            # Tenta carregar dados do avatar
-            avatar_file = session_dir / "avatar_detalhado.json"
-            if avatar_file.exists():
-                try:
-                    with open(avatar_file, 'r', encoding='utf-8') as f:
-                        avatar_data = json.load(f)
-                except Exception as e:
-                    logger.warning(f"⚠️ Erro ao carregar dados do avatar: {e}")
-            
-            # Tenta carregar contexto estratégico
-            contexto_file = session_dir / "contexto_estrategico.json"
-            if contexto_file.exists():
-                try:
-                    with open(contexto_file, 'r', encoding='utf-8') as f:
-                        contexto_estrategico = json.load(f)
-                except Exception as e:
-                    logger.warning(f"⚠️ Erro ao carregar contexto estratégico: {e}")
-            
-            # Tenta carregar dados da web
-            web_data_file = session_dir / "dados_pesquisa_web.json"
-            if web_data_file.exists():
-                try:
-                    with open(web_data_file, 'r', encoding='utf-8') as f:
-                        dados_web = json.load(f)
-                except Exception as e:
-                    logger.warning(f"⚠️ Erro ao carregar dados da web: {e}")
+            # Carrega dados específicos para o módulo CPL - com fallbacks seguros
+            sintese_master = self._safe_load_json(session_dir / "sintese_master_synthesis.json")
+            avatar_data = self._safe_load_json(session_dir / "avatar_detalhado.json")
+            contexto_estrategico = self._safe_load_json(session_dir / "contexto_estrategico.json")
+            dados_web = self._safe_load_json(session_dir / "dados_pesquisa_web.json")
 
             return {
                 "synthesis_data": synthesis_data,
@@ -336,15 +316,29 @@ class EnhancedModuleProcessor:
 
         except Exception as e:
             logger.error(f"❌ Erro ao carregar dados base: {e}")
-            return {
-                "synthesis_data": {}, 
-                "coleta_content": "", 
-                "context": "",
-                "sintese_master": {},
-                "avatar_data": {},
-                "contexto_estrategico": {},
-                "dados_web": {}
-            }
+            return self._get_empty_base_data()
+
+    def _safe_load_json(self, file_path: Path) -> Dict[str, Any]:
+        """Carrega arquivo JSON de forma segura"""
+        try:
+            if file_path.exists():
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+        except Exception as e:
+            logger.warning(f"⚠️ Erro ao carregar {file_path}: {e}")
+        return {}
+
+    def _get_empty_base_data(self) -> Dict[str, Any]:
+        """Retorna estrutura vazia de dados base"""
+        return {
+            "synthesis_data": {},
+            "coleta_content": "",
+            "context": "Dados limitados - primeira execução",
+            "sintese_master": {},
+            "avatar_data": {},
+            "contexto_estrategico": {},
+            "dados_web": {}
+        }
 
     def _get_module_prompt(self, module_name: str, config: Dict[str, Any], base_data: Dict[str, Any]) -> str:
         """Gera prompt para um módulo específico"""
@@ -396,45 +390,45 @@ Gere um conteúdo extremamente detalhado e prático.
             for fase_key, fase_data in fases.items():
                 markdown_content += f"## {fase_data.get('titulo', fase_key)}\n\n"
                 markdown_content += f"**{fase_data.get('descricao', '')}**\n\n"
-                
+
                 # Adiciona seções específicas de cada fase
                 if 'estrategia' in fase_data:
                     markdown_content += f"### Estratégia\n{fase_data['estrategia']}\n\n"
-                
+
                 if 'versoes_evento' in fase_data:
                     markdown_content += "### Versões do Evento\n"
                     for versao in fase_data['versoes_evento']:
                         markdown_content += f"- **{versao.get('nome_evento', '')}** ({versao.get('tipo', '')}): {versao.get('justificativa_psicologica', '')}\n"
                     markdown_content += "\n"
-                
+
                 if 'teasers' in fase_data:
                     markdown_content += "### Teasers\n"
                     for teaser in fase_data['teasers']:
                         markdown_content += f"- {teaser.get('texto', '')} (*{teaser.get('justificativa', '')}*)\n"
                     markdown_content += "\n"
-                
+
                 if 'historia_transformacao' in fase_data:
                     ht = fase_data['historia_transformacao']
                     markdown_content += "### História de Transformação\n"
                     markdown_content += f"- **Antes**: {ht.get('antes', '')}\n"
                     markdown_content += f"- **Durante**: {ht.get('durante', '')}\n"
                     markdown_content += f"- **Depois**: {ht.get('depois', '')}\n\n"
-                
+
                 # Adiciona outras seções conforme necessário...
                 markdown_content += "---\n\n"
-            
+
             # Adiciona considerações finais
             consideracoes = cpl_content.get('consideracoes_finais', {})
             if consideracoes:
                 markdown_content += "## Considerações Finais\n\n"
                 markdown_content += f"**Impacto Previsto**: {consideracoes.get('impacto_previsto', '')}\n\n"
-                
+
                 if consideracoes.get('diferenciais'):
                     markdown_content += "### Diferenciais\n"
                     for diferencial in consideracoes['diferenciais']:
                         markdown_content += f"- {diferencial}\n"
                     markdown_content += "\n"
-                
+
                 if consideracoes.get('proximos_passos'):
                     markdown_content += "### Próximos Passos\n"
                     for passo in consideracoes['proximos_passos']:
@@ -442,7 +436,7 @@ Gere um conteúdo extremamente detalhado e prático.
                     markdown_content += "\n"
 
             return markdown_content
-            
+
         except Exception as e:
             logger.error(f"❌ Erro ao formatar conteúdo CPL para Markdown: {e}")
             return "# Protocolo de CPLs Devastadores\n\n*Erro ao gerar conteúdo formatado*"
@@ -483,7 +477,7 @@ Este relatório consolida {results['successful_modules']} módulos especializado
                                 title = cpl_data.get('titulo', self.modules_config[module_name]['title'])
                                 descricao = cpl_data.get('descricao', '')
                                 consolidated_content += f"\n## {title}\n\n{descricao}\n\n"
-                                
+
                                 # Adiciona um resumo das fases
                                 fases = cpl_data.get('fases', {})
                                 if fases:
@@ -508,7 +502,7 @@ Este relatório consolida {results['successful_modules']} módulos especializado
                                 lines = content.split('\n')
                                 summary_lines = []
                                 in_executive_summary = False
-                                
+
                                 for line in lines:
                                     if line.startswith('# ') and 'Resumo Executivo' in line:
                                         in_executive_summary = True
@@ -517,7 +511,7 @@ Este relatório consolida {results['successful_modules']} módulos especializado
                                         break
                                     elif in_executive_summary:
                                         summary_lines.append(line)
-                                
+
                                 if summary_lines:
                                     consolidated_content += f"\n## {title}\n\n" + '\n'.join(summary_lines[1:10]) + "\n\n"
                                 else:
@@ -545,14 +539,18 @@ Este relatório consolida {results['successful_modules']} módulos especializado
             logger.error(f"❌ Erro ao gerar relatório consolidado: {e}")
             salvar_erro("relatorio_consolidado", e, contexto={"session_id": session_id})
 
-# Função para integração com o protocolo CPL devastador
-async def create_devastating_cpl_protocol(sintese_master: Dict[str, Any], 
-                                        avatar_data: Dict[str, Any], 
-                                        contexto_estrategico: Dict[str, Any], 
-                                        dados_web: Dict[str, Any], 
+# Instância global
+enhanced_module_processor = EnhancedModuleProcessor()
+
+# Função auxiliar para criação do protocolo CPL (mantida para compatibilidade de chamada)
+async def create_devastating_cpl_protocol(sintese_master: Dict[str, Any],
+                                        avatar_data: Dict[str, Any],
+                                        contexto_estrategico: Dict[str, Any],
+                                        dados_web: Dict[str, Any],
                                         session_id: str) -> Dict[str, Any]:
     """
-    Cria protocolo de CPLs devastadores usando os módulos implementados
+    Cria protocolo de CPLs devastadores usando os módulos implementados.
+    Esta função é um wrapper para chamar diretamente o método do protocolo.
     """
     try:
         if not HAS_ENHANCED_MODULES:
@@ -564,30 +562,30 @@ async def create_devastating_cpl_protocol(sintese_master: Dict[str, Any],
                 'fases': {},
                 'error': 'Módulos não encontrados'
             }
-        
-        logger.info("🚀 Iniciando criação de protocolo CPL devastador")
-        
+
+        logger.info("🚀 Iniciando criação de protocolo CPL devastador via função auxiliar")
+
         # Inicializa o protocolo CPL
         cpl_protocol = CPLDevastadorProtocol()
-        
-        # Extrai dados do contexto
+
+        # Extrai dados do contexto de forma segura
         tema = contexto_estrategico.get('tema', 'Produto/Serviço')
         segmento = contexto_estrategico.get('segmento', 'Mercado')
         publico_alvo = contexto_estrategico.get('publico_alvo', 'Público-alvo')
-        
+
         # Executa protocolo completo
         resultado_cpl = await cpl_protocol.executar_protocolo_completo(
             tema=tema,
-            segmento=segmento, 
+            segmento=segmento,
             publico_alvo=publico_alvo,
             session_id=session_id
         )
-        
-        logger.info("✅ Protocolo CPL devastador criado com sucesso")
+
+        logger.info("✅ Protocolo CPL devastador criado com sucesso via função auxiliar")
         return resultado_cpl
-        
+
     except Exception as e:
-        logger.error(f"❌ Erro ao criar protocolo CPL: {e}")
+        logger.error(f"❌ Erro ao criar protocolo CPL via função auxiliar: {e}")
         return {
             'titulo': 'Protocolo de CPLs Devastadores',
             'descricao': f'Erro na criação: {str(e)}',
@@ -595,6 +593,3 @@ async def create_devastating_cpl_protocol(sintese_master: Dict[str, Any],
             'fases': {},
             'error': str(e)
         }
-
-# Instância global
-enhanced_module_processor = EnhancedModuleProcessor()

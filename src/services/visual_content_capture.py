@@ -102,7 +102,7 @@ class VisualContentCapture:
                 url = "https://google.serper.dev/images"
                 payload = {
                     "q": query,
-                    "num": 3,  # Busca 3 imagens para ter alternativas
+                    "num": 10,  # Busca 10 imagens para ter mais alternativas
                     "safe": "off",
                     "gl": "br",
                     "hl": "pt-br",
@@ -156,11 +156,11 @@ class VisualContentCapture:
                                         }
                             
                             # Rate limiting entre tentativas
-                            await asyncio.sleep(0.5)
+                            time.sleep(0.3)
                     
                     elif response.status_code == 429:
                         logger.warning("⚠️ Rate limit Serper - aguardando 2s...")
-                        await asyncio.sleep(2)
+                        time.sleep(2)
                         continue
                     else:
                         logger.warning(f"⚠️ Status {response.status_code} para query {i}")
@@ -170,7 +170,7 @@ class VisualContentCapture:
                     continue
                 
                 # Pausa entre queries
-                await asyncio.sleep(1)
+                time.sleep(1)
             
             logger.warning("⚠️ Todas as tentativas do Google Images falharam")
             

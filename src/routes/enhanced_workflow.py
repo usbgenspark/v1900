@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -11,15 +12,15 @@ import uuid
 import asyncio
 import os
 import glob
-import json  # Import json for loading data
+import json
 from datetime import datetime
-from typing import Dict, Any, List  # Import necessary for List
+from typing import Dict, Any, List
 from flask import Blueprint, request, jsonify, send_file
-# Lazy imports para evitar carregamento pesado durante inicialização
-# Os serviços serão importados apenas quando necessários
-from services.auto_save_manager import salvar_etapa
+import threading
 
 # Import dos serviços necessários
+# services.auto_save_manager será importado diretamente para evitar circular imports
+
 def get_services():
     """Lazy loading dos serviços para evitar problemas de inicialização"""
     try:
@@ -47,6 +48,12 @@ def get_services():
 logger = logging.getLogger(__name__)
 
 enhanced_workflow_bp = Blueprint('enhanced_workflow', __name__)
+
+# Instância global do AutoSaveManager para evitar circular imports e garantir consistência
+from services.auto_save_manager import AutoSaveManager
+auto_save_manager_instance = AutoSaveManager()
+salvar_etapa = auto_save_manager_instance.salvar_etapa
+
 
 @enhanced_workflow_bp.route('/workflow/step1/start', methods=['POST'])
 def start_step1_collection():
@@ -93,90 +100,100 @@ def start_step1_collection():
             "query": query,
             "context": context,
             "timestamp": datetime.now().isoformat()
-        }, categoria="workflow")
+        }, categoria="workflow", session_id=session_id)
 
         # Executa coleta massiva em thread separada
-        def execute_collection():
+        def execute_collection_thread():
             logger.info(f"🚀 INICIANDO THREAD DE COLETA - Sessão: {session_id}")
             try:
                 # Carrega serviços de forma lazy
                 services = get_services()
                 if not services:
                     logger.error("❌ Falha ao carregar serviços necessários")
+                    salvar_etapa("etapa1_erro", {
+                        "session_id": session_id,
+                        "error": "Falha ao carregar serviços",
+                        "timestamp": datetime.now().isoformat()
+                    }, categoria="workflow", session_id=session_id)
                     return
 
-                logger.info(f"🔄 Configurando event loop - Sessão: {session_id}")
-                # Executa busca massiva real
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                async def async_collection_tasks():
+                    search_results = {'web_results': [], 'social_results': [], 'youtube_results': []}
+                    massive_results = {}
+                    viral_analysis = {}
 
-                try:
-                    logger.info(f"🔍 Executando busca massiva - Sessão: {session_id}")
-                    # Executa busca massiva real com verificação de método e TIMEOUT
-                    real_search_orch = services['real_search_orchestrator']
-                    if hasattr(real_search_orch, 'execute_massive_real_search'):
-                        # Adiciona timeout de 5 minutos para evitar loop infinito
-                        try:
-                            search_results = loop.run_until_complete(
-                                asyncio.wait_for(
-                                    real_search_orch.execute_massive_real_search(
-                                        query=query,
-                                        context=context,
-                                        session_id=session_id
-                                    ),
-                                    timeout=300  # 5 minutos
-                                )
+                    try:
+                        logger.info(f"🔍 Executando busca massiva - Sessão: {session_id}")
+                        real_search_orch = services['real_search_orchestrator']
+                        if hasattr(real_search_orch, 'execute_massive_real_search'):
+                            search_results = await real_search_orch.execute_massive_real_search(
+                                query=query,
+                                context=context,
+                                session_id=session_id
                             )
-                        except asyncio.TimeoutError:
-                            logger.error("❌ Timeout na busca massiva - parando para evitar loop")
-                            search_results = {'web_results': [], 'social_results': [], 'youtube_results': []}
-                    else:
-                        logger.error("❌ Método execute_massive_real_search não encontrado")
-                        search_results = {'web_results': [], 'social_results': [], 'youtube_results': []}
-                    logger.info(f"✅ Busca massiva concluída - Sessão: {session_id}")
+                        else:
+                            logger.error("❌ Método execute_massive_real_search não encontrado")
+                        logger.info(f"✅ Busca massiva concluída - Sessão: {session_id}")
 
-                    # BUSCA MASSIVA JÁ FOI EXECUTADA ACIMA - NÃO REPETIR PARA EVITAR LOOP
-                    logger.info(f"✅ Dados coletados pela busca massiva - Sessão: {session_id}")
+                        logger.info(f"🌐 Executando busca ALIBABA WebSailor - Sessão: {session_id}")
+                        massive_results = await services['massive_search_engine'].execute_massive_search(
+                            produto=context.get('segmento', context.get('produto', query)),
+                            publico_alvo=context.get('publico', context.get('publico_alvo', 'público brasileiro')),
+                            session_id=session_id
+                        )
+                        logger.info(f"✅ Busca ALIBABA WebSailor concluída - Sessão: {session_id}")
 
-                    # Analisa e captura conteúdo viral
-                    viral_analysis = loop.run_until_complete(
-                        services['viral_content_analyzer'].analyze_and_capture_viral_content(
+                        logger.info(f"🔥 Analisando e capturando conteúdo viral - Sessão: {session_id}")
+                        viral_analysis = await services['viral_content_analyzer'].analyze_and_capture_viral_content(
                             search_results=search_results,
                             session_id=session_id,
                             max_captures=15
                         )
+                        logger.info(f"✅ Análise viral concluída - Sessão: {session_id}")
+
+                    except Exception as e:
+                        logger.error(f"❌ Erro durante as operações assíncronas da Etapa 1: {e}")
+                        # Continua mesmo com erro para tentar gerar o relatório com o que foi coletado
+
+                    # GERA RELATÓRIO VIRAL AUTOMATICAMENTE
+                    logger.info("🔥 Gerando relatório viral automático...")
+                    viral_report_generator = services['ViralReportGenerator']()
+                    viral_report_success = viral_report_generator.generate_viral_report(session_id)
+                    if viral_report_success:
+                        logger.info("✅ Relatório viral gerado e salvo automaticamente")
+                    else:
+                        logger.warning("⚠️ Falha ao gerar relatório viral automático")
+
+                    # GERA CONSOLIDAÇÃO FINAL COMPLETA
+                    logger.info("🔗 CONSOLIDANDO TODOS OS DADOS DA ETAPA 1...")
+                    consolidacao_final = _gerar_consolidacao_final_etapa1(
+                        session_id, search_results, viral_analysis, massive_results
                     )
 
-                finally:
-                    loop.close()
+                    # Gera relatório de coleta
+                    collection_report = _generate_collection_report(
+                        search_results, viral_analysis, session_id, context
+                    )
 
-                # GERA RELATÓRIO VIRAL AUTOMATICAMENTE
-                logger.info("🔥 Gerando relatório viral automático...")
-                viral_report_generator = services['ViralReportGenerator']()
-                viral_report_success = viral_report_generator.generate_viral_report(session_id)
-                if viral_report_success:
-                    logger.info("✅ Relatório viral gerado e salvo automaticamente")
-                else:
-                    logger.warning("⚠️ Falha ao gerar relatório viral automático")
+                    # Salva relatório
+                    _save_collection_report(collection_report, session_id)
 
-                # Gera relatório de coleta
-                collection_report = _generate_collection_report(
-                    search_results, viral_analysis, session_id, context
-                )
+                    # Salva resultado da etapa 1 COM CONSOLIDAÇÃO
+                    salvar_etapa("etapa1_concluida", {
+                        "session_id": session_id,
+                        "search_results": search_results,
+                        "viral_analysis": viral_analysis,
+                        "massive_results": massive_results,
+                        "consolidacao_final": consolidacao_final,
+                        "collection_report_generated": True,
+                        "timestamp": datetime.now().isoformat(),
+                        "estatisticas_finais": consolidacao_final.get("estatisticas", {})
+                    }, categoria="workflow", session_id=session_id)
 
-                # Salva relatório
-                _save_collection_report(collection_report, session_id)
+                    logger.info(f"✅ ETAPA 1 CONCLUÍDA - Sessão: {session_id}")
+                    logger.info(f"📊 CONSOLIDAÇÃO: {consolidacao_final.get('estatisticas', {}).get('total_dados_coletados', 0)} dados únicos")
 
-                # Salva resultado da etapa 1
-                salvar_etapa("etapa1_concluida", {
-                    "session_id": session_id,
-                    "search_results": search_results,
-                    "viral_analysis": viral_analysis,
-                    "collection_report_generated": True,
-                    "timestamp": datetime.now().isoformat()
-                }, categoria="workflow")
-
-                logger.info(f"✅ ETAPA 1 CONCLUÍDA - Sessão: {session_id}")
+                asyncio.run(async_collection_tasks())
 
             except Exception as e:
                 logger.error(f"❌ Erro na execução da Etapa 1: {e}")
@@ -184,19 +201,16 @@ def start_step1_collection():
                     "session_id": session_id,
                     "error": str(e),
                     "timestamp": datetime.now().isoformat()
-                }, categoria="workflow")
+                }, categoria="workflow", session_id=session_id)
 
-        # Inicia execução em background
-        logger.info(f"🎯 INICIANDO THREAD EM BACKGROUND - Sessão: {session_id}")
-        import threading
-        thread = threading.Thread(target=execute_collection, daemon=True)
+        # Inicia a thread para a coleta
+        thread = threading.Thread(target=execute_collection_thread)
         thread.start()
-        logger.info(f"✅ THREAD INICIADA - Sessão: {session_id}")
 
         return jsonify({
             "success": True,
             "session_id": session_id,
-            "message": "Etapa 1 iniciada: Coleta massiva de dados",
+            "message": "Etapa 1 iniciada: Coleta massiva de dados em segundo plano",
             "query": query,
             "estimated_duration": "3-5 minutos",
             "next_step": "/api/workflow/step2/start",
@@ -227,52 +241,51 @@ def start_step2_synthesis():
         salvar_etapa("etapa2_iniciada", {
             "session_id": session_id,
             "timestamp": datetime.now().isoformat()
-        }, categoria="workflow")
+        }, categoria="workflow", session_id=session_id)
 
         # Executa síntese em thread separada
-        def execute_synthesis():
+        def execute_synthesis_thread():
             try:
                 # Carrega serviços de forma lazy
                 services = get_services()
                 if not services:
                     logger.error("❌ Falha ao carregar serviços necessários")
+                    salvar_etapa("etapa2_erro", {
+                        "session_id": session_id,
+                        "error": "Falha ao carregar serviços",
+                        "timestamp": datetime.now().isoformat()
+                    }, categoria="workflow", session_id=session_id)
                     return
 
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-
-                try:
-                    # Executa síntese master com busca ativa
-                    synthesis_result = loop.run_until_complete(
-                        services['enhanced_synthesis_engine'].execute_enhanced_synthesis(
+                async def async_synthesis_tasks():
+                    synthesis_result = {}
+                    behavioral_result = {}
+                    market_result = {}
+                    try:
+                        # Executa síntese master com busca ativa
+                        synthesis_result = await services['enhanced_synthesis_engine'].execute_enhanced_synthesis(
                             session_id=session_id,
                             synthesis_type="master_synthesis"
                         )
-                    )
 
-                    # Executa síntese comportamental
-                    behavioral_result = loop.run_until_complete(
-                        services['enhanced_synthesis_engine'].execute_behavioral_synthesis(session_id)
-                    )
+                        # Executa síntese comportamental
+                        behavioral_result = await services['enhanced_synthesis_engine'].execute_behavioral_synthesis(session_id)
 
-                    # Executa síntese de mercado
-                    market_result = loop.run_until_complete(
-                        services['enhanced_synthesis_engine'].execute_market_synthesis(session_id)
-                    )
+                        # Executa síntese de mercado
+                        market_result = await services['enhanced_synthesis_engine'].execute_market_synthesis(session_id)
+                    except Exception as e:
+                        logger.error(f"❌ Erro durante as operações assíncronas da Etapa 2: {e}")
 
-                finally:
-                    loop.close()
+                    # Salva resultado da etapa 2
+                    salvar_etapa("etapa2_concluida", {
+                        "session_id": session_id,
+                        "synthesis_result": synthesis_result,
+                        "behavioral_result": behavioral_result,
+                        "market_result": market_result,
+                        "timestamp": datetime.now().isoformat()
+                    }, categoria="workflow", session_id=session_id)
 
-                # Salva resultado da etapa 2
-                salvar_etapa("etapa2_concluida", {
-                    "session_id": session_id,
-                    "synthesis_result": synthesis_result,
-                    "behavioral_result": behavioral_result,
-                    "market_result": market_result,
-                    "timestamp": datetime.now().isoformat()
-                }, categoria="workflow")
-
-                logger.info(f"✅ ETAPA 2 CONCLUÍDA - Sessão: {session_id}")
+                    logger.info(f"✅ ETAPA 2 CONCLUÍDA - Sessão: {session_id}")
 
             except Exception as e:
                 logger.error(f"❌ Erro na execução da Etapa 2: {e}")
@@ -280,17 +293,16 @@ def start_step2_synthesis():
                     "session_id": session_id,
                     "error": str(e),
                     "timestamp": datetime.now().isoformat()
-                }, categoria="workflow")
+                }, categoria="workflow", session_id=session_id)
 
-        # Inicia execução em background
-        import threading
-        thread = threading.Thread(target=execute_synthesis, daemon=True)
+        # Inicia a thread para a síntese
+        thread = threading.Thread(target=execute_synthesis_thread)
         thread.start()
 
         return jsonify({
             "success": True,
             "session_id": session_id,
-            "message": "Etapa 2 iniciada: Síntese com IA e busca ativa",
+            "message": "Etapa 2 iniciada: Síntese com IA e busca ativa em segundo plano",
             "estimated_duration": "2-4 minutos",
             "next_step": "/api/workflow/step3/start",
             "status_endpoint": f"/api/workflow/status/{session_id}"
@@ -320,41 +332,44 @@ def start_step3_generation():
         salvar_etapa("etapa3_iniciada", {
             "session_id": session_id,
             "timestamp": datetime.now().isoformat()
-        }, categoria="workflow")
+        }, categoria="workflow", session_id=session_id)
 
         # Executa geração em thread separada
-        def execute_generation():
+        def execute_generation_thread():
             try:
                 # Carrega serviços de forma lazy
                 services = get_services()
                 if not services:
                     logger.error("❌ Falha ao carregar serviços necessários")
+                    salvar_etapa("etapa3_erro", {
+                        "session_id": session_id,
+                        "error": "Falha ao carregar serviços",
+                        "timestamp": datetime.now().isoformat()
+                    }, categoria="workflow", session_id=session_id)
                     return
 
-                # Gera todos os 16 módulos
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                async def async_generation_tasks():
+                    modules_result = {}
+                    final_report = ""
+                    try:
+                        # Gera todos os 16 módulos
+                        modules_result = await services['enhanced_module_processor'].generate_all_modules(session_id)
 
-                try:
-                    modules_result = loop.run_until_complete(
-                        services['enhanced_module_processor'].generate_all_modules(session_id)
-                    )
-                finally:
-                    loop.close()
+                        # Compila relatório final
+                        final_report = services['comprehensive_report_generator_v3'].compile_final_markdown_report(session_id)
+                    except Exception as e:
+                        logger.error(f"❌ Erro durante as operações assíncronas da Etapa 3: {e}")
 
-                # Compila relatório final
-                final_report = services['comprehensive_report_generator_v3'].compile_final_markdown_report(session_id)
+                    # Salva resultado da etapa 3
+                    salvar_etapa("etapa3_concluida", {
+                        "session_id": session_id,
+                        "modules_result": modules_result,
+                        "final_report": final_report,
+                        "timestamp": datetime.now().isoformat()
+                    }, categoria="workflow", session_id=session_id)
 
-                # Salva resultado da etapa 3
-                salvar_etapa("etapa3_concluida", {
-                    "session_id": session_id,
-                    "modules_result": modules_result,
-                    "final_report": final_report,
-                    "timestamp": datetime.now().isoformat()
-                }, categoria="workflow")
-
-                logger.info(f"✅ ETAPA 3 CONCLUÍDA - Sessão: {session_id}")
-                logger.info(f"📊 {modules_result.get('successful_modules', 0)}/16 módulos gerados")
+                    logger.info(f"✅ ETAPA 3 CONCLUÍDA - Sessão: {session_id}")
+                    logger.info(f"📊 {modules_result.get('successful_modules', 0)}/16 módulos gerados")
 
             except Exception as e:
                 logger.error(f"❌ Erro na execução da Etapa 3: {e}")
@@ -362,19 +377,18 @@ def start_step3_generation():
                     "session_id": session_id,
                     "error": str(e),
                     "timestamp": datetime.now().isoformat()
-                }, categoria="workflow")
+                }, categoria="workflow", session_id=session_id)
 
-        # Inicia execução em background
-        import threading
-        thread = threading.Thread(target=execute_generation, daemon=True)
+        # Inicia a thread para a geração
+        thread = threading.Thread(target=execute_generation_thread)
         thread.start()
 
         return jsonify({
             "success": True,
             "session_id": session_id,
-            "message": "Etapa 3 iniciada: Geração de 16 módulos",
+            "message": "Etapa 3 iniciada: Geração dos 16 módulos e relatório final em segundo plano",
             "estimated_duration": "4-6 minutos",
-            "modules_to_generate": 16,
+            "next_step": "/api/workflow/results", # Ou um endpoint para o relatório final
             "status_endpoint": f"/api/workflow/status/{session_id}"
         }), 200
 
@@ -383,113 +397,200 @@ def start_step3_generation():
         return jsonify({
             "success": False,
             "error": str(e),
-            "message": "Falha ao iniciar geração de módulos"
+            "message": "Falha ao iniciar geração"
         }), 500
 
-@enhanced_workflow_bp.route('/workflow/complete', methods=['POST'])
-def execute_complete_workflow():
-    """Executa workflow completo em sequência"""
+
+@enhanced_workflow_bp.route('/workflow/full_workflow/start', methods=['POST'])
+def start_full_workflow():
+    """Inicia o workflow completo (Etapa 1, 2 e 3 em sequência) em segundo plano"""
     try:
         data = request.get_json()
 
         # Gera session_id único
         session_id = f"session_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
 
-        logger.info(f"🚀 WORKFLOW COMPLETO INICIADO - Sessão: {session_id}")
+        # Extrai parâmetros
+        segmento = data.get('segmento', '').strip()
+        produto = data.get('produto', '').strip()
+        publico = data.get('publico', '').strip()
 
-        # Executa workflow completo em thread separada
-        def execute_full_workflow():
+        # Validação
+        if not segmento:
+            return jsonify({"error": "Segmento é obrigatório"}), 400
+
+        # Constrói query de pesquisa
+        query_parts = [segmento]
+        if produto:
+            query_parts.append(produto)
+        query_parts.extend(["Brasil", "2024", "mercado"])
+
+        query = " ".join(query_parts)
+
+        # Contexto da análise
+        context = {
+            "segmento": segmento,
+            "produto": produto,
+            "publico": publico,
+            "query_original": query,
+            "workflow_type": "enhanced_v3"
+        }
+
+        logger.info(f"🚀 WORKFLOW COMPLETO INICIADO - Sessão: {session_id}")
+        logger.info(f"🔍 Query: {query}")
+
+        # Salva início do workflow completo
+        salvar_etapa("workflow_completo_iniciado", {
+            "session_id": session_id,
+            "query": query,
+            "context": context,
+            "timestamp": datetime.now().isoformat()
+        }, categoria="workflow", session_id=session_id)
+
+        def execute_full_workflow_thread():
             try:
-                # Carrega serviços de forma lazy
                 services = get_services()
                 if not services:
-                    logger.error("❌ Falha ao carregar serviços necessários")
+                    logger.error("❌ Falha ao carregar serviços necessários para workflow completo")
+                    salvar_etapa("workflow_erro", {
+                        "session_id": session_id,
+                        "error": "Falha ao carregar serviços para workflow completo",
+                        "timestamp": datetime.now().isoformat()
+                    }, categoria="workflow", session_id=session_id)
                     return
 
-                # ETAPA 1: Coleta
-                logger.info("🌊 Executando Etapa 1: Coleta massiva")
+                async def async_full_workflow_tasks():
+                    search_results = {'web_results': [], 'social_results': [], 'youtube_results': []}
+                    massive_results = {}
+                    viral_analysis = {}
+                    synthesis_result = {}
+                    behavioral_result = {}
+                    market_result = {}
+                    modules_result = {}
+                    final_report = ""
 
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                    # ETAPA 1: Coleta Massiva de Dados
+                    logger.info(f"🚀 INICIANDO ETAPA 1 (Workflow Completo) - Sessão: {session_id}")
+                    try:
+                        real_search_orch = services['real_search_orchestrator']
+                        if hasattr(real_search_orch, 'execute_massive_real_search'):
+                            search_results = await real_search_orch.execute_massive_real_search(
+                                query=query,
+                                context=context,
+                                session_id=session_id
+                            )
+                        else:
+                            logger.error("❌ Método execute_massive_real_search não encontrado na Etapa 1 (Workflow Completo)")
 
-                try:
-                    # Constrói query
-                    segmento = data.get('segmento', '').strip()
-                    produto = data.get('produto', '').strip()
-                    query = f"{segmento} {produto} Brasil 2024 mercado".strip()                 
-                    context = {
-                        "segmento": segmento,
-                        "produto": produto,
-                        "publico": data.get('publico', ''),
-                        "preco": data.get('preco', ''),
-                        "objetivo_receita": data.get('objetivo_receita', ''),
-                        "workflow_type": "complete"
-                    }
-
-                    # Executa busca massiva
-                    search_results = loop.run_until_complete(
-                        services['real_search_orchestrator'].execute_massive_real_search(
-                            query=query,
-                            context=context,
+                        massive_results = await services['massive_search_engine'].execute_massive_search(
+                            produto=context.get('segmento', context.get('produto', query)),
+                            publico_alvo=context.get('publico', context.get('publico_alvo', 'público brasileiro')),
                             session_id=session_id
                         )
-                    )
-
-                    # Analisa conteúdo viral
-                    viral_analysis = loop.run_until_complete(
-                        services['viral_content_analyzer'].analyze_and_capture_viral_content(
+                        viral_analysis = await services['viral_content_analyzer'].analyze_and_capture_viral_content(
                             search_results=search_results,
-                            session_id=session_id
+                            session_id=session_id,
+                            max_captures=15
                         )
-                    )
 
-                    # GERA RELATÓRIO VIRAL AUTOMATICAMENTE
-                    logger.info("🔥 Gerando relatório viral automático...")
-                    viral_report_generator = services['ViralReportGenerator']()
-                    viral_report_success = viral_report_generator.generate_viral_report(session_id)
-                    if viral_report_success:
-                        logger.info("✅ Relatório viral gerado e salvo automaticamente")
-                    else:
-                        logger.warning("⚠️ Falha ao gerar relatório viral automático")
+                        # GERA RELATÓRIO VIRAL AUTOMATICAMENTE
+                        viral_report_generator = services['ViralReportGenerator']()
+                        viral_report_generator.generate_viral_report(session_id)
 
-                    # Gera relatório de coleta
-                    collection_report = _generate_collection_report(
-                        search_results, viral_analysis, session_id, context
-                    )
-                    _save_collection_report(collection_report, session_id)
+                        # GERA CONSOLIDAÇÃO FINAL COMPLETA
+                        consolidacao_final = _gerar_consolidacao_final_etapa1(
+                            session_id, search_results, viral_analysis, massive_results
+                        )
 
-                    # ETAPA 2: Síntese
-                    logger.info("🧠 Executando Etapa 2: Síntese com IA")
+                        # Gera e salva relatório de coleta
+                        collection_report = _generate_collection_report(
+                            search_results, viral_analysis, session_id, context
+                        )
+                        _save_collection_report(collection_report, session_id)
 
-                    synthesis_result = loop.run_until_complete(
-                        services['enhanced_synthesis_engine'].execute_enhanced_synthesis(session_id)
-                    )
+                        salvar_etapa("etapa1_concluida_full_workflow", {
+                            "session_id": session_id,
+                            "search_results": search_results,
+                            "viral_analysis": viral_analysis,
+                            "massive_results": massive_results,
+                            "consolidacao_final": consolidacao_final,
+                            "collection_report_generated": True,
+                            "timestamp": datetime.now().isoformat(),
+                            "estatisticas_finais": consolidacao_final.get("estatisticas", {})
+                        }, categoria="workflow", session_id=session_id)
+                        logger.info(f"✅ ETAPA 1 (Workflow Completo) CONCLUÍDA - Sessão: {session_id}")
+                    except Exception as e:
+                        logger.error(f"❌ Erro na Etapa 1 (Workflow Completo): {e}")
+                        salvar_etapa("etapa1_erro_full_workflow", {
+                            "session_id": session_id,
+                            "error": str(e),
+                            "timestamp": datetime.now().isoformat()
+                        }, categoria="workflow", session_id=session_id)
+                        return # Aborta o workflow se a primeira etapa falhar
 
-                    # ETAPA 3: Geração de módulos
-                    logger.info("📝 Executando Etapa 3: Geração de módulos")
+                    # ETAPA 2: Síntese com IA e Busca Ativa
+                    logger.info(f"🧠 INICIANDO ETAPA 2 (Workflow Completo) - Sessão: {session_id}")
+                    try:
+                        synthesis_result = await services['enhanced_synthesis_engine'].execute_enhanced_synthesis(
+                            session_id=session_id,
+                            synthesis_type="master_synthesis"
+                        )
+                        behavioral_result = await services['enhanced_synthesis_engine'].execute_behavioral_synthesis(session_id)
+                        market_result = await services['enhanced_synthesis_engine'].execute_market_synthesis(session_id)
 
-                    modules_result = loop.run_until_complete(
-                        services['enhanced_module_processor'].generate_all_modules(session_id)
-                    )
+                        salvar_etapa("etapa2_concluida_full_workflow", {
+                            "session_id": session_id,
+                            "synthesis_result": synthesis_result,
+                            "behavioral_result": behavioral_result,
+                            "market_result": market_result,
+                            "timestamp": datetime.now().isoformat()
+                        }, categoria="workflow", session_id=session_id)
+                        logger.info(f"✅ ETAPA 2 (Workflow Completo) CONCLUÍDA - Sessão: {session_id}")
+                    except Exception as e:
+                        logger.error(f"❌ Erro na Etapa 2 (Workflow Completo): {e}")
+                        salvar_etapa("etapa2_erro_full_workflow", {
+                            "session_id": session_id,
+                            "error": str(e),
+                            "timestamp": datetime.now().isoformat()
+                        }, categoria="workflow", session_id=session_id)
+                        return # Aborta o workflow se a segunda etapa falhar
 
-                    # Compila relatório final
-                    final_report = services['comprehensive_report_generator_v3'].compile_final_markdown_report(session_id)
+                    # ETAPA 3: Geração dos 16 Módulos e Relatório Final
+                    logger.info(f"📝 INICIANDO ETAPA 3 (Workflow Completo) - Sessão: {session_id}")
+                    try:
+                        modules_result = await services['enhanced_module_processor'].generate_all_modules(session_id)
+                        final_report = services['comprehensive_report_generator_v3'].compile_final_markdown_report(session_id)
 
-                finally:
-                    loop.close()
+                        salvar_etapa("etapa3_concluida_full_workflow", {
+                            "session_id": session_id,
+                            "modules_result": modules_result,
+                            "final_report": final_report,
+                            "timestamp": datetime.now().isoformat()
+                        }, categoria="workflow", session_id=session_id)
+                        logger.info(f"✅ ETAPA 3 (Workflow Completo) CONCLUÍDA - Sessão: {session_id}")
+                    except Exception as e:
+                        logger.error(f"❌ Erro na Etapa 3 (Workflow Completo): {e}")
+                        salvar_etapa("etapa3_erro_full_workflow", {
+                            "session_id": session_id,
+                            "error": str(e),
+                            "timestamp": datetime.now().isoformat()
+                        }, categoria="workflow", session_id=session_id)
+                        return # Aborta o workflow se a terceira etapa falhar
 
-                # Salva resultado final
-                salvar_etapa("workflow_completo", {
-                    "session_id": session_id,
-                    "search_results": search_results,
-                    "viral_analysis": viral_analysis,
-                    "synthesis_result": synthesis_result,
-                    "modules_result": modules_result,
-                    "final_report": final_report,
-                    "timestamp": datetime.now().isoformat()
-                }, categoria="workflow")
+                    # Salva resultado final do workflow completo
+                    salvar_etapa("workflow_completo_concluido", {
+                        "session_id": session_id,
+                        "search_results": search_results,
+                        "viral_analysis": viral_analysis,
+                        "synthesis_result": synthesis_result,
+                        "modules_result": modules_result,
+                        "final_report": final_report,
+                        "timestamp": datetime.now().isoformat()
+                    }, categoria="workflow", session_id=session_id)
 
-                logger.info(f"✅ WORKFLOW COMPLETO CONCLUÍDO - Sessão: {session_id}")
+                    logger.info(f"✅ WORKFLOW COMPLETO CONCLUÍDO - Sessão: {session_id}")
+
+                asyncio.run(async_full_workflow_tasks())
 
             except Exception as e:
                 logger.error(f"❌ Erro no workflow completo: {e}")
@@ -497,21 +598,20 @@ def execute_complete_workflow():
                     "session_id": session_id,
                     "error": str(e),
                     "timestamp": datetime.now().isoformat()
-                }, categoria="workflow")
+                }, categoria="workflow", session_id=session_id)
 
-        # Inicia execução em background
-        import threading
-        thread = threading.Thread(target=execute_full_workflow, daemon=True)
+        # Inicia a thread para o workflow completo
+        thread = threading.Thread(target=execute_full_workflow_thread)
         thread.start()
 
         return jsonify({
             "success": True,
             "session_id": session_id,
-            "message": "Workflow completo iniciado",
+            "message": "Workflow completo iniciado em segundo plano",
             "estimated_total_duration": "8-15 minutos",
             "steps": [
                 "Etapa 1: Coleta massiva (3-5 min)",
-                "Etapa 2: Síntese com IA (2-4 min)", 
+                "Etapa 2: Síntese com IA (2-4 min)",
                 "Etapa 3: Geração de módulos (4-6 min)"
             ],
             "status_endpoint": f"/api/workflow/status/{session_id}"
@@ -528,14 +628,12 @@ def execute_complete_workflow():
 def get_workflow_status(session_id):
     """Obtém status do workflow"""
     try:
-        # Verifica arquivos salvos para determinar status
-
         status = {
             "session_id": session_id,
             "current_step": 0,
             "step_status": {
                 "step1": "pending",
-                "step2": "pending", 
+                "step2": "pending",
                 "step3": "pending"
             },
             "progress_percentage": 0,
@@ -544,34 +642,40 @@ def get_workflow_status(session_id):
         }
 
         # Verifica se etapa 1 foi concluída
-        if os.path.exists(f"analyses_data/{session_id}/relatorio_coleta.md"):
+        if os.path.exists(f"analyses_data/{session_id}/relatorio_coleta.md") or \
+           os.path.exists(f"analyses_data/workflow/{session_id}/etapa1_concluida_full_workflow.json"):
             status["step_status"]["step1"] = "completed"
             status["current_step"] = 1
             status["progress_percentage"] = 33
 
         # Verifica se etapa 2 foi concluída
-        if os.path.exists(f"analyses_data/{session_id}/resumo_sintese.json"):
+        if os.path.exists(f"analyses_data/workflow/{session_id}/etapa2_concluida_full_workflow.json"):
             status["step_status"]["step2"] = "completed"
             status["current_step"] = 2
             status["progress_percentage"] = 66
 
         # Verifica se etapa 3 foi concluída
-        if os.path.exists(f"analyses_data/{session_id}/relatorio_final.md"):
+        if os.path.exists(f"analyses_data/{session_id}/relatorio_final.md") or \
+           os.path.exists(f"analyses_data/workflow/{session_id}/etapa3_concluida_full_workflow.json"):
             status["step_status"]["step3"] = "completed"
             status["current_step"] = 3
             status["progress_percentage"] = 100
             status["estimated_remaining"] = "Concluído"
 
         # Verifica se há erros
-        error_files = [
-            f"relatorios_intermediarios/workflow/etapa1_erro*{session_id}*",
-            f"relatorios_intermediarios/workflow/etapa2_erro*{session_id}*",
-            f"relatorios_intermediarios/workflow/etapa3_erro*{session_id}*"
+        error_files_patterns = [
+            f"analyses_data/workflow/{session_id}/etapa1_erro*",
+            f"analyses_data/workflow/{session_id}/etapa2_erro*",
+            f"analyses_data/workflow/{session_id}/etapa3_erro*",
+            f"analyses_data/workflow/{session_id}/workflow_erro*"
         ]
 
-        for pattern in error_files:
+        for pattern in error_files_patterns:
             if glob.glob(pattern):
-                status["error"] = "Erro detectado em uma das etapas"
+                status["error"] = "Erro detectado em uma das etapas do workflow."
+                status["step_status"]["step1"] = "failed" if "etapa1_erro" in pattern else status["step_status"]["step1"]
+                status["step_status"]["step2"] = "failed" if "etapa2_erro" in pattern else status["step_status"]["step2"]
+                status["step_status"]["step3"] = "failed" if "etapa3_erro" in pattern else status["step_status"]["step3"]
                 break
 
         return jsonify(status), 200
@@ -588,7 +692,6 @@ def get_workflow_status(session_id):
 def get_workflow_results(session_id):
     """Obtém resultados do workflow"""
     try:
-
         results = {
             "session_id": session_id,
             "available_files": [],
@@ -644,11 +747,10 @@ def get_workflow_results(session_id):
 def download_workflow_file(session_id, file_type):
     """Download de arquivos do workflow"""
     try:
-        # Define o caminho base (sem src/)
+        # Define o caminho base
         base_path = os.path.join("analyses_data", session_id)
 
         if file_type == "final_report":
-            # Tenta primeiro o relatorio_final.md, depois o completo como fallback
             file_path = os.path.join(base_path, "relatorio_final.md")
             if not os.path.exists(file_path):
                 file_path = os.path.join(base_path, "relatorio_final_completo.md")
@@ -674,12 +776,12 @@ def download_workflow_file(session_id, file_type):
 
 # --- Funções auxiliares ---
 def _generate_collection_report(
-    search_results: Dict[str, Any], 
-    viral_analysis: Dict[str, Any], 
-    session_id: str, 
+    search_results: Dict[str, Any],
+    viral_analysis: Dict[str, Any],
+    session_id: str,
     context: Dict[str, Any]
 ) -> str:
-    """Gera relatório ULTRA CONSOLIDADO com TODOS os dados extraídos"""
+    """Gera relatório consolidado com dados extraídos"""
 
     # Função auxiliar para formatar números com segurança
     def safe_format_int(value):
@@ -688,159 +790,46 @@ def _generate_collection_report(
         except (ValueError, TypeError):
             return str(value) if value is not None else 'N/A'
 
-    # 🔥 CARREGA TODOS OS TRECHOS SALVOS AUTOMATICAMENTE
+    # Carrega dados salvos de forma simplificada
     all_saved_excerpts = _load_all_saved_excerpts(session_id)
-
-    # 🔥 CARREGA TODOS OS DADOS VIRAIS SALVOS
     all_viral_data = _load_all_viral_data(session_id)
-
-    # 🔥 CARREGA TODOS OS DADOS DO MASSIVE SEARCH ENGINE
     massive_search_data = _load_massive_search_data(session_id)
 
-    report = f"""# RELATÓRIO CONSOLIDADO ULTRA-COMPLETO - ARQV30 Enhanced v3.0
+    report = f"""# RELATÓRIO CONSOLIDADO ULTRA-COMPLETO - ARQV30 Enhanced v3.0\n\n**🎯 DADOS 100% REAIS - ZERO SIMULAÇÃO - TUDO UNIFICADO**\n\n**Sessão:** {session_id}  \n**Query:** {search_results.get('query', 'N/A')}  \n**Iniciado em:** {search_results.get('statistics', {}).get('search_started', 'N/A')}  \n**Duração:** {search_results.get('statistics', {}).get('search_duration', 0):.2f} segundos\n\n---\n\n## 📊 RESUMO EXECUTIVO DA COLETA MASSIVA\n\n### Estatísticas Completas:\n- **Total de Fontes:** {search_results.get('statistics', {}).get('total_sources', 0)}\n- **URLs Únicas:** {search_results.get('statistics', {}).get('unique_urls', 0)}\n- **Trechos Salvos:** {len(all_saved_excerpts)}\n- **Dados Virais:** {len(all_viral_data)}\n- **Dados Massive Search:** {len(massive_search_data)}\n- **Screenshots:** {len(viral_analysis.get('screenshots_captured', []))}\n\n---\n\n## TRECHOS DE CONTEÚDO EXTRAÍDO\n\n*Amostras do conteúdo real coletado durante a busca massiva*\n\n"""
 
-**🎯 DADOS 100% REAIS - ZERO SIMULAÇÃO - TUDO UNIFICADO**
+    # Adiciona trechos de conteúdo
+    report += _generate_content_excerpts_section(search_results, viral_analysis)
 
-**Sessão:** {session_id}  
-**Query:** {search_results.get('query', 'N/A')}  
-**Iniciado em:** {search_results.get('search_started', 'N/A')}  
-**Duração:** {search_results.get('statistics', {}).get('search_duration', 0):.2f} segundos
+    # Adiciona dados virais completos
+    report += _incorporate_viral_data(session_id, viral_analysis)
 
----
-
-## 📊 RESUMO EXECUTIVO DA COLETA MASSIVA
-
-### Estatísticas Completas:
-- **Total de Fontes:** {search_results.get('statistics', {}).get('total_sources', 0)}
-- **URLs Únicas:** {search_results.get('statistics', {}).get('unique_urls', 0)}
-- **Conteúdo Total Extraído:** {safe_format_int(search_results.get('statistics', {}).get('content_extracted', 0))} caracteres ({search_results.get('statistics', {}).get('content_extracted', 0)/1024:.1f} KB)
-- **Trechos Salvos Automaticamente:** {len(all_saved_excerpts)}
-- **Dados Virais Coletados:** {len(all_viral_data)}
-- **Screenshots Capturados:** {len(viral_analysis.get('screenshots_captured', []))}
-- **Provedores Utilizados:** {len(search_results.get('providers_used', []))}
-- **Massive Search Results:** {len(massive_search_data)}
-
-### Provedores Utilizados:
-"""
-    providers = search_results.get('providers_used', [])
-    if providers:
-        report += "\n".join(f"- {provider}" for provider in providers) + "\n\n"
-    else:
-        report += "- Nenhum provedor listado\n\n"
-
-    # 🔥 SEÇÃO 1: TODOS OS TRECHOS EXTRAÍDOS AUTOMATICAMENTE
-    report += "---\n\n## 🔍 TODOS OS TRECHOS DE CONTEÚDO EXTRAÍDOS (DADOS REAIS)\n\n"
-
-    if all_saved_excerpts:
-        for i, excerpt in enumerate(all_saved_excerpts, 1):
-            report += f"### Trecho {i}: {excerpt.get('titulo', 'Sem título')}\n\n"
-            report += f"**URL:** {excerpt.get('url', 'N/A')}  \n"
-            report += f"**Método de Extração:** {excerpt.get('metodo_extracao', 'N/A')}  \n"
-            report += f"**Qualidade:** {excerpt.get('qualidade', 0):.1f}/100  \n"
-            report += f"**Timestamp:** {excerpt.get('timestamp_extracao', 'N/A')}  \n"
-
-            conteudo = excerpt.get('conteudo', '')
-            if conteudo:
-                # Mostra o conteúdo completo sem limitação
-                report += f"**CONTEÚDO COMPLETO:**\n```\n{conteudo}\n```\n\n"
-
-            report += "---\n\n"
-    else:
-        report += "⚠️ Nenhum trecho extraído encontrado.\n\n"
-
-    # 🔥 SEÇÃO 2: RESULTADOS DE BUSCA WEB DETALHADOS
-    report += "## 🌐 RESULTADOS DE BUSCA WEB COMPLETOS\n\n"
-
-    web_results = search_results.get('web_results', [])
-    if web_results:
-        for i, result in enumerate(web_results, 1):
-            report += f"### Web Result {i}: {result.get('title', 'Sem título')}\n\n"
-            report += f"**URL:** {result.get('url', 'N/A')}  \n"
-            report += f"**Fonte:** {result.get('source', 'N/A')}  \n"
-            report += f"**Relevância:** {result.get('relevance_score', 0):.2f}/1.0  \n"
-
-            snippet = result.get('snippet', '')
-            if snippet:
-                report += f"**Resumo:** {snippet}  \n"
-
-            content = result.get('content', '')
-            if content:
-                # Mostra conteúdo completo
-                report += f"**CONTEÚDO EXTRAÍDO COMPLETO:**\n```\n{content}\n```\n"
-
-            content_length = result.get('content_length', 0)
-            if content_length > 0:
-                report += f"**Tamanho:** {content_length:,} caracteres ({content_length/1024:.1f} KB)  \n"
-
-            report += "\n---\n\n"
-
-    # 🔥 SEÇÃO 3: DADOS VIRAIS COMPLETOS
-    report += "## 🔥 ANÁLISE COMPLETA DE CONTEÚDO VIRAL\n\n"
-
-    if all_viral_data:
-        for i, viral_item in enumerate(all_viral_data, 1):
-            report += f"### Conteúdo Viral {i}\n\n"
-
-            # Dados estruturados do viral
-            if isinstance(viral_item, dict):
-                for key, value in viral_item.items():
-                    if key == 'images_extracted' and isinstance(value, list):
-                        report += f"**{key.replace('_', ' ').title()}:** {len(value)} imagens\n"
-                        for j, img in enumerate(value[:5], 1):  # Mostra até 5 imagens
-                            if isinstance(img, dict):
-                                report += f"  - Imagem {j}: {img.get('title', 'Sem título')} (Score: {img.get('viral_score', 0):.1f})\n"
-                    elif key == 'statistics' and isinstance(value, dict):
-                        report += f"**Estatísticas Virais:**\n"
-                        for stat_key, stat_value in value.items():
-                            report += f"  - {stat_key}: {stat_value}\n"
-                    elif isinstance(value, (str, int, float)):
-                        report += f"**{key.replace('_', ' ').title()}:** {value}\n"
-                    elif isinstance(value, list):
-                        report += f"**{key.replace('_', ' ').title()}:** {len(value)} itens\n"
-
-
-
-            report += "\n---\n\n"
-
-    # 🔥 SEÇÃO 4: RESULTADOS DO MASSIVE SEARCH ENGINE
-    report += "## 🚀 DADOS DO MASSIVE SEARCH ENGINE\n\n"
-
+    # Adiciona resultados do Massive Search Engine
     if massive_search_data:
+        report += "## 🚀 DADOS DO MASSIVE SEARCH ENGINE\n\n"
         for i, massive_item in enumerate(massive_search_data, 1):
             report += f"### Massive Search Result {i}\n\n"
-
             if isinstance(massive_item, dict):
-                # Mostra dados estruturados
                 produto = massive_item.get('produto', 'N/A')
                 publico_alvo = massive_item.get('publico_alvo', 'N/A')
-
                 report += f"**Produto:** {produto}\n"
                 report += f"**Público Alvo:** {publico_alvo}\n"
-
-                # Dados da busca massiva
                 busca_massiva = massive_item.get('busca_massiva', {})
                 if busca_massiva:
                     alibaba_results = busca_massiva.get('alibaba_websailor_results', [])
                     real_search_results = busca_massiva.get('real_search_orchestrator_results', [])
-
                     report += f"**Resultados Alibaba WebSailor:** {len(alibaba_results)}\n"
                     report += f"**Resultados Real Search:** {len(real_search_results)}\n"
-
-                    # Mostra alguns resultados detalhados
                     for j, alibaba_result in enumerate(alibaba_results[:3], 1):
                         if isinstance(alibaba_result, dict):
                             report += f"  - Alibaba {j}: {alibaba_result.get('query', 'N/A')}\n"
-
-                # Metadados
                 metadata = massive_item.get('metadata', {})
                 if metadata:
                     report += f"**Total de Buscas:** {metadata.get('total_searches', 0)}\n"
                     report += f"**Tamanho Final:** {metadata.get('size_kb', 0):.1f} KB\n"
                     report += f"**APIs Utilizadas:** {len(metadata.get('apis_used', []))}\n"
-
             report += "\n---\n\n"
 
-    # 🔥 SEÇÃO 5: RESULTADOS DO YOUTUBE
+    # Adiciona resultados do YouTube
     youtube_results = search_results.get('youtube_results', [])
     if youtube_results:
         report += "## 📺 RESULTADOS COMPLETOS DO YOUTUBE\n\n"
@@ -852,14 +841,12 @@ def _generate_collection_report(
             report += f"**Comentários:** {safe_format_int(result.get('comment_count', 'N/A'))}  \n"
             report += f"**Score Viral:** {result.get('viral_score', 0):.2f}/10  \n"
             report += f"**URL:** {result.get('url', 'N/A')}  \n"
-
             description = result.get('description', '')
             if description:
                 report += f"**Descrição:** {description}  \n"
-
             report += "\n---\n\n"
 
-    # 🔥 SEÇÃO 6: RESULTADOS DE REDES SOCIAIS
+    # Adiciona resultados de Redes Sociais
     social_results = search_results.get('social_results', [])
     if social_results:
         report += "## 📱 RESULTADOS COMPLETOS DE REDES SOCIAIS\n\n"
@@ -869,14 +856,12 @@ def _generate_collection_report(
             report += f"**Autor:** {result.get('author', 'N/A')}  \n"
             report += f"**Engajamento:** {result.get('viral_score', 0):.2f}/10  \n"
             report += f"**URL:** {result.get('url', 'N/A')}  \n"
-
             content = result.get('content', '')
             if content:
                 report += f"**CONTEÚDO COMPLETO:** {content}  \n"
-
             report += "\n---\n\n"
 
-    # 🔥 SEÇÃO 7: SCREENSHOTS E EVIDÊNCIAS VISUAIS
+    # Adiciona Screenshots e Evidências Visuais
     screenshots = viral_analysis.get('screenshots_captured', [])
     if screenshots:
         report += "## 📸 EVIDÊNCIAS VISUAIS COMPLETAS\n\n"
@@ -885,7 +870,6 @@ def _generate_collection_report(
             report += f"**Plataforma:** {screenshot.get('platform', 'N/A').title()}  \n"
             report += f"**Score Viral:** {screenshot.get('viral_score', 0):.2f}/10  \n"
             report += f"**URL Original:** {screenshot.get('url', 'N/A')}  \n"
-
             metrics = screenshot.get('content_metrics', {})
             if metrics:
                 if 'views' in metrics:
@@ -894,52 +878,119 @@ def _generate_collection_report(
                     report += f"**Likes:** {safe_format_int(metrics['likes'])}  \n"
                 if 'comments' in metrics:
                     report += f"**Comentários:** {safe_format_int(metrics['comments'])}  \n"
-
             img_path = screenshot.get('relative_path', '')
             if img_path:
                 report += f"**Arquivo:** {img_path}  \n"
-
             report += "\n---\n\n"
 
-    # 🔥 SEÇÃO 8: CONTEXTO DA ANÁLISE
+    # Adiciona Contexto da Análise
     report += "## 🎯 CONTEXTO COMPLETO DA ANÁLISE\n\n"
     for key, value in context.items():
         if value:
             report += f"**{key.replace('_', ' ').title()}:** {value}  \n"
 
-    # 🔥 ESTATÍSTICAS FINAIS
+    # Estatísticas Finais
     total_content_chars = sum(len(str(excerpt.get('conteudo', ''))) for excerpt in all_saved_excerpts)
 
     report += f"""
 
----
-
-## 📊 ESTATÍSTICAS FINAIS CONSOLIDADAS
-
-- **Total de Trechos Extraídos:** {len(all_saved_excerpts)}
-- **Total de Dados Virais:** {len(all_viral_data)}
-- **Total de Dados Massive Search:** {len(massive_search_data)}
-- **Total de Caracteres de Conteúdo:** {total_content_chars:,}
-- **Total de Screenshots:** {len(screenshots)}
-- **Total de Resultados Web:** {len(web_results)}
-- **Total de Resultados YouTube:** {len(youtube_results)}
-- **Total de Resultados Sociais:** {len(social_results)}
-
-**🔥 GARANTIA: 100% DADOS REAIS - ZERO SIMULAÇÃO - TUDO CONSOLIDADO**
-
----
-
-*Relatório ultra-consolidado gerado automaticamente em {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}*
-*Pronto para análise profunda pela IA QWEN via OpenRouter*
-"""
+---\n
+## 📊 ESTATÍSTICAS FINAIS CONSOLIDADAS\n
+- **Total de Trechos Extraídos:** {len(all_saved_excerpts)}\n- **Total de Dados Virais:** {len(all_viral_data)}\n- **Total de Dados Massive Search:** {len(massive_search_data)}\n- **Total de Caracteres de Conteúdo:** {total_content_chars:,}\n- **Total de Screenshots:** {len(screenshots)}\n- **Total de Resultados Web:** {len(search_results.get('web_results', []))}\n- **Total de Resultados YouTube:** {len(search_results.get('youtube_results', []))}\n- **Total de Resultados Sociais:** {len(search_results.get('social_results', []))}\n\n**🔥 GARANTIA: 100% DADOS REAIS - ZERO SIMULAÇÃO - TUDO CONSOLIDADO**\n\n---\n\n*Relatório ultra-consolidado gerado automaticamente em {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}*\n*Pronto para análise profunda pela IA QWEN via OpenRouter*\n"""
 
     return report
+
+def _gerar_consolidacao_final_etapa1(session_id: str, search_results: Dict, viral_analysis: Dict, massive_results: Dict) -> Dict[str, Any]:
+    """Gera consolidação final de TODOS os dados coletados na Etapa 1"""
+    try:
+        consolidacao = {
+            "session_id": session_id,
+            "tipo": "consolidacao_etapa1_completa",
+            "dados_web": [],
+            "dados_sociais": [],
+            "dados_virais": [],
+            "imagens_baixadas": [],
+            "screenshots_capturados": [],
+            "estatisticas": {
+                "total_dados_coletados": 0,
+                "total_caracteres": 0,
+                "fontes_unicas": 0,
+                "qualidade_media": 0,
+                "relevancia_media": 0
+            },
+            "consolidado_em": datetime.now().isoformat()
+        }
+
+        # CONSOLIDAR DADOS WEB
+        if search_results.get('web_results'):
+            for result in search_results['web_results']:
+                if result.get('url') and result.get('title'):
+                    consolidacao["dados_web"].append({
+                        "url": result['url'],
+                        "titulo": result['title'],
+                        "fonte": result.get('source', 'web'),
+                        "relevancia": result.get('relevance_score', 0.5),
+                        "conteudo_tamanho": result.get('content_length', 0)
+                    })
+
+        # CONSOLIDAR DADOS SOCIAIS
+        if search_results.get('social_results'):
+            for result in search_results['social_results']:
+                if result.get('url'):
+                    consolidacao["dados_sociais"].append({
+                        "url": result['url'],
+                        "plataforma": result.get('platform', 'social'),
+                        "titulo": result.get('title', ''),
+                        "engajamento": result.get('engagement_score', 0)
+                    })
+
+        # CONSOLIDAR DADOS VIRAIS
+        if viral_analysis.get('viral_content'):
+            for viral in viral_analysis['viral_content']:
+                consolidacao["dados_virais"].append({
+                    "url": viral.get('post_url', ''),
+                    "plataforma": viral.get('platform', ''),
+                    "titulo": viral.get('title', ''),
+                    "engajamento": viral.get('engagement_score', 0),
+                    "imagem_url": viral.get('image_url', '')
+                })
+
+        # CONSOLIDAR IMAGENS E SCREENSHOTS
+        if viral_analysis.get('screenshots_captured'):
+            consolidacao["screenshots_capturados"] = viral_analysis['screenshots_captured']
+
+        # CALCULAR ESTATÍSTICAS
+        total_dados = len(consolidacao["dados_web"]) + len(consolidacao["dados_sociais"]) + len(consolidacao["dados_virais"])
+        urls_unicas = set()
+
+        for item in consolidacao["dados_web"] + consolidacao["dados_sociais"] + consolidacao["dados_virais"]:
+            if item.get('url'):
+                urls_unicas.add(item['url'])
+
+        consolidacao["estatisticas"] = {
+            "total_dados_coletados": total_dados,
+            "fontes_unicas": len(urls_unicas),
+            "dados_web": len(consolidacao["dados_web"]),
+            "dados_sociais": len(consolidacao["dados_sociais"]),
+            "dados_virais": len(consolidacao["dados_virais"]),
+            "screenshots": len(consolidacao["screenshots_capturados"])
+        }
+
+        # SALVA CONSOLIDAÇÃO
+        salvar_etapa("consolidacao_etapa1_final", consolidacao, categoria="workflow", session_id=session_id)
+
+        logger.info(f"🔗 CONSOLIDAÇÃO FINAL ETAPA 1: {total_dados} dados, {len(urls_unicas)} fontes únicas")
+        return consolidacao
+
+    except Exception as e:
+        logger.error(f"❌ Erro na consolidação final Etapa 1: {e}")
+        return {"error": str(e), "session_id": session_id}
+
 
 def _generate_content_excerpts_section(search_results: Dict[str, Any], viral_analysis: Dict[str, Any]) -> str:
     """Gera seção com trechos de conteúdo extraído das fontes coletadas"""
 
-    section = "\n---\n\n## TRECHOS DE CONTEÚDO EXTRAÍDO\n\n"
-    section += "*Amostras do conteúdo real coletado durante a busca massiva*\n\n"
+    section = ""
 
     content_found = False
 
@@ -1116,101 +1167,81 @@ def _save_collection_report(report_content: str, session_id: str):
 
     except Exception as e:
         logger.error(f"❌ Erro ao salvar relatório de coleta: {e}")
-        # Opcional: Re-raise a exception se quiser que o erro pare a execução da etapa
-        # raise 
+
 
 # --- Funções para carregar todos os dados salvos ---
 
 def _load_all_saved_excerpts(session_id: str) -> List[Dict[str, Any]]:
-    """Carrega TODOS os trechos de pesquisa web salvos para a sessão"""
+    """Carrega TODOS os trechos de pesquisa web salvos para a sessão com CONSOLIDAÇÃO MÁXIMA"""
     excerpts = []
+    urls_processadas = set()
 
     try:
-        # Diretório de trechos de pesquisa web
-        excerpts_dir = f"analyses_data/pesquisa_web/{session_id}"
+        # 1. Carrega arquivo consolidado primeiro (prioridade)
+        consolidado_path = os.path.join("analyses_data", "pesquisa_web", session_id, "consolidado.json")
+        if os.path.exists(consolidado_path):
+            try:
+                with open(consolidado_path, 'r', encoding='utf-8') as f:
+                    consolidado = json.load(f)
+                    for trecho in consolidado.get('trechos', []):
+                        if trecho.get('url') not in urls_processadas:
+                            excerpts.append(trecho)
+                            urls_processadas.add(trecho.get('url'))
+                logger.info(f"✅ {len(excerpts)} trechos carregados do arquivo consolidado")
+            except Exception as e:
+                logger.error(f"❌ Erro ao carregar arquivo consolidado: {e}")
 
+        # 2. Diretório de trechos da sessão
+        excerpts_dir = os.path.join("analyses_data", "pesquisa_web", session_id)
         if os.path.exists(excerpts_dir):
             for filename in os.listdir(excerpts_dir):
-                if filename.endswith('.json'):
+                if filename.startswith('trecho_') and filename.endswith('.json') and filename != 'consolidado.json':
                     file_path = os.path.join(excerpts_dir, filename)
                     try:
                         with open(file_path, 'r', encoding='utf-8') as f:
                             excerpt_data = json.load(f)
-                            excerpts.append(excerpt_data)
+                            if excerpt_data.get('url') not in urls_processadas:
+                                excerpts.append(excerpt_data)
+                                urls_processadas.add(excerpt_data.get('url'))
                     except Exception as e:
-                        logger.error(f"❌ Erro ao carregar trecho {filename}: {e}")
-
-        # Também procura em relatorios_intermediarios
-        intermediarios_dir = f"relatorios_intermediarios/pesquisa_web"
-        if os.path.exists(intermediarios_dir):
-            for filename in os.listdir(intermediarios_dir):
-                if session_id in filename and filename.endswith('.json'):
-                    file_path = os.path.join(intermediarios_dir, filename)
-                    try:
-                        with open(file_path, 'r', encoding='utf-8') as f:
-                            excerpt_data = json.load(f)
-                            excerpts.append(excerpt_data)
-                    except Exception as e:
-                        logger.error(f"❌ Erro ao carregar trecho intermediário {filename}: {e}")
-
-        logger.info(f"✅ {len(excerpts)} trechos carregados para sessão {session_id}")
-        return excerpts
+                        logger.warning(f"⚠️ Erro ao carregar trecho {filename}: {e}")
 
     except Exception as e:
-        logger.error(f"❌ Erro ao carregar trechos salvos: {e}")
-        return []
+        logger.error(f"❌ Erro ao carregar todos os trechos salvos: {e}")
+
+    return excerpts
 
 def _load_all_viral_data(session_id: str) -> List[Dict[str, Any]]:
     """Carrega TODOS os dados virais salvos para a sessão"""
     viral_data = []
-
     try:
-        # Procura arquivos viral_results_*.json
-        viral_patterns = [
-            f"viral_images_data/viral_results_*{session_id[:8]}*.json",
-            f"viral_images_data/viral_results_*.json"
-        ]
-
-        import glob
-        for pattern in viral_patterns:
-            files = glob.glob(pattern)
-            for file_path in files:
-                try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        viral_content = json.load(f)
-                        viral_data.append(viral_content)
-                except Exception as e:
-                    logger.error(f"❌ Erro ao carregar dados virais {file_path}: {e}")
-
-        logger.info(f"✅ {len(viral_data)} arquivos de dados virais carregados")
-        return viral_data
-
-    except Exception as e:
-        logger.error(f"❌ Erro ao carregar dados virais: {e}")
-        return []
-
-def _load_massive_search_data(session_id: str) -> List[Dict[str, Any]]:
-    """Carrega TODOS os dados do Massive Search Engine"""
-    massive_data = []
-
-    try:
-        # Procura arquivos RES_BUSCA_*.json
-        import glob
-
-        massive_files = glob.glob("analyses_data/RES_BUSCA_*.json")
-        for file_path in massive_files:
+        viral_files = glob.glob(f"viral_images_data/viral_results_*{session_id[:8]}*.json")
+        for file_path in viral_files:
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
-                    massive_content = json.load(f)
-                    # Verifica se é da sessão atual ou recente
-                    if massive_content.get('session_id') == session_id or not massive_content.get('session_id'):
-                        massive_data.append(massive_content)
+                    viral_data.append(json.load(f))
             except Exception as e:
-                logger.error(f"❌ Erro ao carregar dados massive {file_path}: {e}")
-
-        logger.info(f"✅ {len(massive_data)} arquivos do Massive Search Engine carregados")
-        return massive_data
-
+                logger.warning(f"⚠️ Erro ao carregar arquivo viral {file_path}: {e}")
     except Exception as e:
-        logger.error(f"❌ Erro ao carregar dados do Massive Search Engine: {e}")
-        return []
+        logger.error(f"❌ Erro ao carregar todos os dados virais: {e}")
+    return viral_data
+
+def _load_massive_search_data(session_id: str) -> List[Dict[str, Any]]:
+    """Carrega TODOS os dados do massive search engine salvos para a sessão"""
+    massive_data = []
+    try:
+        # Assume que os resultados do massive search engine são salvos em analyses_data/massive_search/{session_id}/...
+        massive_search_dir = os.path.join("analyses_data", "massive_search", session_id)
+        if os.path.exists(massive_search_dir):
+            for filename in os.listdir(massive_search_dir):
+                if filename.endswith('.json'):
+                    file_path = os.path.join(massive_search_dir, filename)
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            massive_data.append(json.load(f))
+                    except Exception as e:
+                        logger.warning(f"⚠️ Erro ao carregar arquivo massive search {file_path}: {e}")
+    except Exception as e:
+        logger.error(f"❌ Erro ao carregar todos os dados do massive search: {e}")
+    return massive_data
+

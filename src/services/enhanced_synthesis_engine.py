@@ -293,22 +293,16 @@ DADOS PARA ANÁLISE:
     def _load_viral_report(self, session_id: str) -> Optional[str]:
         """Carrega relatório de conteúdo viral se disponível"""
         try:
-            # Tenta primeiro o caminho relativo (a partir de src/)
-            viral_path = Path(f"../analyses_data/{session_id}/relatorio_viral.md")
+            # Caminho correto direto
+            viral_path = Path(f"analyses_data/{session_id}/relatorio_viral.md")
             if viral_path.exists():
                 with open(viral_path, 'r', encoding='utf-8') as f:
                     return f.read()
             
-            # Fallback para caminho absoluto
-            project_root = Path(__file__).parent.parent.parent
-            viral_path_abs = project_root / "analyses_data" / session_id / "relatorio_viral.md"
-            if viral_path_abs.exists():
-                with open(viral_path_abs, 'r', encoding='utf-8') as f:
-                    return f.read()
-            
+            logger.info(f"ℹ️ Relatório viral não encontrado: {viral_path}")
             return None
         except Exception as e:
-            logger.warning(f"⚠️ Relatório viral não disponível: {e}")
+            logger.warning(f"⚠️ Erro ao carregar relatório viral: {e}")
             return None
 
     def _build_synthesis_context(self, collection_report: str, viral_report: str = None) -> str:

@@ -321,39 +321,37 @@ class ViralContentAnalyzer:
             chrome_options.add_argument(f"--window-size={self.screenshot_config['width']},{self.screenshot_config['height']}")
             chrome_options.add_argument("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36")
 
-            # Usa Chrome do sistema Nix diretamente
+            # Configuração otimizada para Replit
             try:
-                from .selenium_checker import SeleniumChecker
-                checker = SeleniumChecker()
-                check_results = checker.full_check()
-
-                if not check_results['selenium_ready']:
-                    logger.warning("⚠️ Selenium não está pronto - screenshots desabilitados")
-                    return []
-
-                best_chrome_path = check_results.get('best_chrome_path')
-                if best_chrome_path:
-                    chrome_options.binary_location = best_chrome_path
-                    logger.info(f"✅ Chrome configurado: {best_chrome_path}")
-                else:
-                    logger.warning("⚠️ Chrome não encontrado - screenshots desabilitados")
-                    return []
-
+                # Tenta importar selenium checker
+                try:
+                    from services.selenium_checker import SeleniumChecker
+                    checker = SeleniumChecker()
+                    check_results = checker.full_check()
+                    
+                    if check_results.get('selenium_ready'):
+                        best_chrome_path = check_results.get('best_chrome_path')
+                        if best_chrome_path:
+                            chrome_options.binary_location = best_chrome_path
+                except ImportError:
+                    logger.info("ℹ️ Selenium checker não disponível, usando configuração padrão")
+                
+                # Tenta inicializar driver
                 try:
                     service = Service(ChromeDriverManager().install())
                     driver = webdriver.Chrome(service=service, options=chrome_options)
-                    logger.info("✅ ChromeDriverManager funcionou")
+                    logger.info("✅ Chrome driver iniciado com sucesso")
                 except Exception as e:
-                    logger.warning(f"⚠️ ChromeDriverManager falhou: {e}, tentando usar chromedriver do sistema")
+                    logger.warning(f"⚠️ ChromeDriverManager falhou: {e}")
                     try:
                         driver = webdriver.Chrome(options=chrome_options)
-                        logger.info("✅ Chromedriver do sistema funcionou")
-                    except WebDriverException as sys_driver_e:
-                        logger.error(f"❌ Falha ao iniciar Chrome com chromedriver do sistema: {sys_driver_e}. Certifique-se de que o chromedriver esteja no PATH ou especificado.")
+                        logger.info("✅ Chrome driver do sistema iniciado")
+                    except WebDriverException:
+                        logger.warning("⚠️ Screenshots desabilitados - Chrome não disponível no ambiente")
                         return []
 
             except Exception as e:
-                logger.error(f"❌ Falha total na configuração do Chrome: {e}")
+                logger.warning(f"⚠️ Erro na configuração do Chrome: {e} - Screenshots desabilitados")
                 return []
 
             screenshots_dir = Path(f"analyses_data/files/{session_id}")

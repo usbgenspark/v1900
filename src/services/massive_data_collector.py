@@ -176,8 +176,36 @@ class MassiveDataCollector:
             logger.info("🎯 FASE 5: Selecionando URLs mais relevantes...")
             selected_urls = visual_content_capture.select_top_urls(web_results, max_urls=8)
 
-            # FASE 6: Captura de Screenshots
-            logger.info("📸 FASE 6: Capturando screenshots das URLs selecionadas...")
+            # FASE 6: Extração de Imagens Virais (PRIORITÁRIO)
+            logger.info("🔥 FASE 6: Extraindo imagens virais reais...")
+            try:
+                from .viral_integration_service import viral_image_finder
+                viral_images = await viral_image_finder.extract_images_with_content(query)
+                
+                massive_data["viral_images"] = {
+                    "success": True,
+                    "total_images": len(viral_images),
+                    "images": [
+                        {
+                            "image_url": img.image_url,
+                            "post_url": img.post_url,
+                            "platform": img.platform,
+                            "title": img.title,
+                            "viral_score": img.engagement_score,
+                            "local_path": img.image_path
+                        } for img in viral_images
+                    ]
+                }
+                massive_data["statistics"]["viral_images_count"] = len(viral_images)
+                logger.info(f"✅ {len(viral_images)} imagens virais extraídas com sucesso")
+                
+            except Exception as viral_error:
+                logger.error(f"❌ Erro na extração de imagens virais: {viral_error}")
+                massive_data["viral_images"] = {"success": False, "error": str(viral_error)}
+                massive_data["statistics"]["viral_images_count"] = 0
+
+            # FASE 7: Captura de Screenshots (FALLBACK)
+            logger.info("📸 FASE 7: Capturando screenshots das URLs selecionadas...")
             if selected_urls:
                 try:
                     screenshot_results = await visual_content_capture.capture_screenshots(

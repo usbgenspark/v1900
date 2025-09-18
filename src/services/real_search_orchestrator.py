@@ -361,74 +361,79 @@ class RealSearchOrchestrator:
             if not api_key:
                 return {'success': False, 'error': 'Firecrawl API key não disponível'}
 
-            async with aiohttp.ClientSession() as session:
-                headers = {
-                    'Authorization': f'Bearer {api_key}',
-                    'Content-Type': 'application/json'
-                }
+            if AIOHTTP_AVAILABLE:
+                timeout = aiohttp.ClientTimeout(total=30)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    headers = {
+                        'Authorization': f'Bearer {api_key}',
+                        'Content-Type': 'application/json'
+                    }
 
-                # FASE 1: SEARCH para encontrar URLs relevantes
-                search_payload = {
-                    'query': query,
-                    'limit': 5
-                }
+                    # FASE 1: SEARCH para encontrar URLs relevantes
+                    search_payload = {
+                        'query': query,
+                        'limit': 5
+                    }
 
-                search_url = 'https://api.firecrawl.dev/v1/search'
-                async with session.post(search_url, json=search_payload, headers=headers, timeout=30) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        if response.status == 402:
-                            logger.warning(f"⚠️ Firecrawl créditos insuficientes - pulando: {error_text}")
-                            return {'success': False, 'error': 'Insufficient credits', 'skip': True}
-                        logger.error(f"❌ Firecrawl search erro {response.status}: {error_text}")
-                        return {'success': False, 'error': f'Search HTTP {response.status}'}
+                    search_url = 'https://api.firecrawl.dev/v1/search'
+                    async with session.post(search_url, json=search_payload, headers=headers, timeout=30) as response:
+                        if response.status != 200:
+                            error_text = await response.text()
+                            if response.status == 402:
+                                logger.warning(f"⚠️ Firecrawl créditos insuficientes - pulando: {error_text}")
+                                return {'success': False, 'error': 'Insufficient credits', 'skip': True}
+                            logger.error(f"❌ Firecrawl search erro {response.status}: {error_text}")
+                            return {'success': False, 'error': f'Search HTTP {response.status}'}
 
-                    search_data = await response.json()
-                    urls = [item.get('url') for item in search_data.get('data', []) if item.get('url')]
+                        search_data = await response.json()
+                        urls = [item.get('url') for item in search_data.get('data', []) if item.get('url')]
 
-                    if not urls:
-                        logger.warning("⚠️ Nenhuma URL encontrada no search")
-                        return {'success': False, 'error': 'No URLs found'}
+                        if not urls:
+                            logger.warning("⚠️ Nenhuma URL encontrada no search")
+                            return {'success': False, 'error': 'No URLs found'}
 
-                # FASE 2: SCRAPE das URLs encontradas
-                all_results = []
-                scrape_url = 'https://api.firecrawl.dev/v1/scrape'
+                    # FASE 2: SCRAPE das URLs encontradas
+                    all_results = []
+                    scrape_url = 'https://api.firecrawl.dev/v1/scrape'
 
-                for url in urls[:3]:  # Limita a 3 URLs para não sobrecarregar
-                    try:
-                        scrape_payload = {
-                            'url': url,
-                            'formats': ['markdown'],
-                            'onlyMainContent': True,
-                            'includeTags': ['p', 'h1', 'h2', 'h3', 'article'],
-                            'excludeTags': ['nav', 'footer', 'aside', 'script']
-                        }
+                    for url in urls[:3]:  # Limita a 3 URLs para não sobrecarregar
+                        try:
+                            scrape_payload = {
+                                'url': url,
+                                'formats': ['markdown'],
+                                'onlyMainContent': True,
+                                'includeTags': ['p', 'h1', 'h2', 'h3', 'article'],
+                                'excludeTags': ['nav', 'footer', 'aside', 'script']
+                            }
 
-                        async with session.post(scrape_url, json=scrape_payload, headers=headers, timeout=45) as scrape_response:
-                            if scrape_response.status == 200:
-                                scrape_data = await scrape_response.json()
-                                content = scrape_data.get('data', {}).get('markdown', '')
+                            async with session.post(scrape_url, json=scrape_payload, headers=headers, timeout=45) as scrape_response:
+                                if scrape_response.status == 200:
+                                    scrape_data = await scrape_response.json()
+                                    content = scrape_data.get('data', {}).get('markdown', '')
 
-                                if content and len(content) > 500:  # Exige conteúdo REALMENTE substancial
-                                    # Extrai e salva o conteúdo
-                                    results = self._extract_search_results_from_content(content, 'firecrawl', session_id, url)
-                                    all_results.extend(results)
-                                    logger.info(f"✅ FIRECRAWL extraiu {len(content)} chars de {url}")
+                                    if content and len(content) > 500:  # Exige conteúdo REALMENTE substancial
+                                        # Extrai e salva o conteúdo
+                                        results = self._extract_search_results_from_content(content, 'firecrawl', session_id, url)
+                                        all_results.extend(results)
+                                        logger.info(f"✅ FIRECRAWL extraiu {len(content)} chars de {url}")
+                                    else:
+                                        logger.debug(f"⚠️ Conteúdo insuficiente de {url}: {len(content) if content else 0} chars")
                                 else:
-                                    logger.debug(f"⚠️ Conteúdo insuficiente de {url}: {len(content) if content else 0} chars")
-                            else:
-                                logger.warning(f"⚠️ Erro ao fazer scrape de {url}: {scrape_response.status}")
-                    except Exception as e:
-                        logger.error(f"❌ Erro ao processar {url}: {e}")
-                        continue
+                                    logger.warning(f"⚠️ Erro ao fazer scrape de {url}: {scrape_response.status}")
+                        except Exception as e:
+                            logger.error(f"❌ Erro ao processar {url}: {e}")
+                            continue
 
-                return {
-                    'success': True,
-                    'provider': 'FIRECRAWL',
-                    'results': all_results,
-                    'urls_processed': len(urls),
-                    'content_extracted': len(all_results)
-                }
+                    return {
+                        'success': True,
+                        'provider': 'FIRECRAWL',
+                        'results': all_results,
+                        'urls_processed': len(urls),
+                        'content_extracted': len(all_results)
+                    }
+            else:
+                logger.error("aiohttp não disponível para Firecrawl")
+                return {'success': False, 'error': 'aiohttp not available'}
 
         except Exception as e:
             logger.error(f"❌ Erro Firecrawl: {e}")
@@ -451,28 +456,33 @@ class RealSearchOrchestrator:
 
             results = []
 
-            async with aiohttp.ClientSession() as session:
-                for search_url in search_urls:
-                    try:
-                        jina_url = f"{self.service_urls['JINA']}{search_url}"
-                        headers = {
-                            'Authorization': f'Bearer {api_key}',
-                            'Accept': 'text/plain'
-                        }
+            if AIOHTTP_AVAILABLE:
+                timeout = aiohttp.ClientTimeout(total=30)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    for search_url in search_urls:
+                        try:
+                            jina_url = f"{self.service_urls['JINA']}{search_url}"
+                            headers = {
+                                'Authorization': f'Bearer {api_key}',
+                                'Accept': 'text/plain'
+                            }
 
-                        async with session.get(
-                            jina_url,
-                            headers=headers,
-                            timeout=30
-                        ) as response:
-                            if response.status == 200:
-                                content = await response.text()
-                                extracted_results = self._extract_search_results_from_content(content, 'jina', session_id)
-                                results.extend(extracted_results)
+                            async with session.get(
+                                jina_url,
+                                headers=headers,
+                                timeout=30
+                            ) as response:
+                                if response.status == 200:
+                                    content = await response.text()
+                                    extracted_results = self._extract_search_results_from_content(content, 'jina', session_id)
+                                    results.extend(extracted_results)
 
-                    except Exception as e:
-                        logger.warning(f"⚠️ Erro em URL Jina {search_url}: {e}")
-                        continue
+                        except Exception as e:
+                            logger.warning(f"⚠️ Erro em URL Jina {search_url}: {e}")
+                            continue
+            else:
+                logger.error("aiohttp não disponível para Jina")
+                return {'success': False, 'error': 'aiohttp not available'}
 
             return {
                 'success': True,
@@ -494,46 +504,51 @@ class RealSearchOrchestrator:
             if not api_key or not cse_id:
                 return {'success': False, 'error': 'Google API não configurada'}
 
-            async with aiohttp.ClientSession() as session:
-                params = {
-                    'key': api_key,
-                    'cx': cse_id,
-                    'q': f"{query} Brasil 2024",
-                    'num': 10,
-                    'lr': 'lang_pt',
-                    'gl': 'br',
-                    'safe': 'off',
-                    'dateRestrict': 'm6'
-                }
+            if AIOHTTP_AVAILABLE:
+                timeout = aiohttp.ClientTimeout(total=30)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    params = {
+                        'key': api_key,
+                        'cx': cse_id,
+                        'q': f"{query} Brasil 2024",
+                        'num': 10,
+                        'lr': 'lang_pt',
+                        'gl': 'br',
+                        'safe': 'off',
+                        'dateRestrict': 'm6'
+                    }
 
-                async with session.get(
-                    self.service_urls['GOOGLE'],
-                    params=params,
-                    timeout=30
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        results = []
+                    async with session.get(
+                        self.service_urls['GOOGLE'],
+                        params=params,
+                        timeout=30
+                    ) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            results = []
 
-                        for item in data.get('items', []):
-                            results.append({
-                                'title': item.get('title', ''),
-                                'url': item.get('link', ''),
-                                'snippet': item.get('snippet', ''),
-                                'source': 'google_real',
-                                'published_date': item.get('pagemap', {}).get('metatags', [{}])[0].get('article:published_time', ''),
-                                'relevance_score': 0.9
-                            })
+                            for item in data.get('items', []):
+                                results.append({
+                                    'title': item.get('title', ''),
+                                    'url': item.get('link', ''),
+                                    'snippet': item.get('snippet', ''),
+                                    'source': 'google_real',
+                                    'published_date': item.get('pagemap', {}).get('metatags', [{}])[0].get('article:published_time', ''),
+                                    'relevance_score': 0.9
+                                })
 
-                        return {
-                            'success': True,
-                            'provider': 'GOOGLE',
-                            'results': results
-                        }
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"❌ Google erro {response.status}: {error_text}")
-                        return {'success': False, 'error': f'HTTP {response.status}'}
+                            return {
+                                'success': True,
+                                'provider': 'GOOGLE',
+                                'results': results
+                            }
+                        else:
+                            error_text = await response.text()
+                            logger.error(f"❌ Google erro {response.status}: {error_text}")
+                            return {'success': False, 'error': f'HTTP {response.status}'}
+            else:
+                logger.error("aiohttp não disponível para Google Search")
+                return {'success': False, 'error': 'aiohttp not available'}
 
         except Exception as e:
             logger.error(f"❌ Erro Google: {e}")
@@ -547,62 +562,67 @@ class RealSearchOrchestrator:
             if not api_key:
                 return {'success': False, 'error': 'YouTube API key não disponível'}
 
-            async with aiohttp.ClientSession() as session:
-                params = {
-                    'part': "snippet,id",
-                    'q': f"{query} Brasil",
-                    'key': api_key,
-                    'maxResults': 25,
-                    'order': 'viewCount',  # Ordena por visualizações
-                    'type': 'video',
-                    'regionCode': 'BR',
-                    'relevanceLanguage': 'pt',
-                    'publishedAfter': '2023-01-01T00:00:00Z'
-                }
+            if AIOHTTP_AVAILABLE:
+                timeout = aiohttp.ClientTimeout(total=30)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    params = {
+                        'part': "snippet,id",
+                        'q': f"{query} Brasil",
+                        'key': api_key,
+                        'maxResults': 25,
+                        'order': 'viewCount',  # Ordena por visualizações
+                        'type': 'video',
+                        'regionCode': 'BR',
+                        'relevanceLanguage': 'pt',
+                        'publishedAfter': '2023-01-01T00:00:00Z'
+                    }
 
-                async with session.get(
-                    self.service_urls['YOUTUBE'],
-                    params=params,
-                    timeout=30
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        results = []
+                    async with session.get(
+                        self.service_urls['YOUTUBE'],
+                        params=params,
+                        timeout=30
+                    ) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            results = []
 
-                        for item in data.get('items', []):
-                            snippet = item.get('snippet', {})
-                            video_id = item.get('id', {}).get('videoId', '')
+                            for item in data.get('items', []):
+                                snippet = item.get('snippet', {})
+                                video_id = item.get('id', {}).get('videoId', '')
 
-                            # Busca estatísticas detalhadas
-                            stats = await self._get_youtube_video_stats(video_id, api_key, session)
+                                # Busca estatísticas detalhadas
+                                stats = await self._get_youtube_video_stats(video_id, api_key, session)
 
-                            results.append({
-                                'title': snippet.get('title', ''),
-                                'url': f"https://www.youtube.com/watch?v={video_id}",
-                                'description': snippet.get('description', ''),
-                                'channel': snippet.get('channelTitle', ''),
-                                'published_at': snippet.get('publishedAt', ''),
-                                'thumbnail': snippet.get('thumbnails', {}).get('high', {}).get('url', ''),
-                                'view_count': stats.get('viewCount', 0),
-                                'comment_count': stats.get('commentCount', 0),
+                                results.append({
+                                    'title': snippet.get('title', ''),
+                                    'url': f"https://www.youtube.com/watch?v={video_id}",
+                                    'description': snippet.get('description', ''),
+                                    'channel': snippet.get('channelTitle', ''),
+                                    'published_at': snippet.get('publishedAt', ''),
+                                    'thumbnail': snippet.get('thumbnails', {}).get('high', {}).get('url', ''),
+                                    'view_count': stats.get('viewCount', 0),
+                                    'comment_count': stats.get('commentCount', 0),
+                                    'platform': 'youtube',
+                                    'viral_score': self._calculate_viral_score(stats),
+                                    'relevance_score': 0.85
+                                })
+
+                            # Ordena por score viral
+                            results.sort(key=lambda x: x['viral_score'], reverse=True)
+
+                            return {
+                                'success': True,
+                                'provider': 'YOUTUBE',
                                 'platform': 'youtube',
-                                'viral_score': self._calculate_viral_score(stats),
-                                'relevance_score': 0.85
-                            })
-
-                        # Ordena por score viral
-                        results.sort(key=lambda x: x['viral_score'], reverse=True)
-
-                        return {
-                            'success': True,
-                            'provider': 'YOUTUBE',
-                            'platform': 'youtube',
-                            'results': results
-                        }
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"❌ YouTube erro {response.status}: {error_text}")
-                        return {'success': False, 'error': f'HTTP {response.status}'}
+                                'results': results
+                            }
+                        else:
+                            error_text = await response.text()
+                            logger.error(f"❌ YouTube erro {response.status}: {error_text}")
+                            return {'success': False, 'error': f'HTTP {response.status}'}
+            else:
+                logger.error("aiohttp não disponível para YouTube Search")
+                return {'success': False, 'error': 'aiohttp not available'}
 
         except Exception as e:
             logger.error(f"❌ Erro YouTube: {e}")
@@ -642,59 +662,64 @@ class RealSearchOrchestrator:
             if not api_key:
                 return {'success': False, 'error': 'Supadata API key não disponível'}
 
-            async with aiohttp.ClientSession() as session:
-                headers = {
-                    'Authorization': f'Bearer {api_key}',
-                    'Content-Type': 'application/json'
-                }
-
-                payload = {
-                    'method': 'social_search',
-                    'params': {
-                        'query': query,
-                        'platforms': ['instagram', 'facebook', 'tiktok'],
-                        'limit': 50,
-                        'sort_by': 'engagement',
-                        'include_metrics': True
+            if AIOHTTP_AVAILABLE:
+                timeout = aiohttp.ClientTimeout(total=45)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    headers = {
+                        'Authorization': f'Bearer {api_key}',
+                        'Content-Type': 'application/json'
                     }
-                }
 
-                async with session.post(
-                    self.service_urls['SUPADATA'],
-                    json=payload,
-                    headers=headers,
-                    timeout=45
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        results = []
-
-                        posts = data.get('result', {}).get('posts', [])
-                        for post in posts:
-                            results.append({
-                                'title': post.get('caption', '')[:100],
-                                'url': post.get('url', ''),
-                                'content': post.get('caption', ''),
-                                'platform': post.get('platform', 'social'),
-                                'engagement_rate': post.get('engagement_rate', 0),
-                                'likes': post.get('likes', 0),
-                                'comments': post.get('comments', 0),
-                                'shares': post.get('shares', 0),
-                                'author': post.get('author', ''),
-                                'published_at': post.get('published_at', ''),
-                                'viral_score': self._calculate_social_viral_score(post),
-                                'relevance_score': 0.8
-                            })
-
-                        return {
-                            'success': True,
-                            'provider': 'SUPADATA',
-                            'results': results
+                    payload = {
+                        'method': 'social_search',
+                        'params': {
+                            'query': query,
+                            'platforms': ['instagram', 'facebook', 'tiktok'],
+                            'limit': 50,
+                            'sort_by': 'engagement',
+                            'include_metrics': True
                         }
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"❌ Supadata erro {response.status}: {error_text}")
-                        return {'success': False, 'error': f'HTTP {response.status}'}
+                    }
+
+                    async with session.post(
+                        self.service_urls['SUPADATA'],
+                        json=payload,
+                        headers=headers,
+                        timeout=45
+                    ) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            results = []
+
+                            posts = data.get('result', {}).get('posts', [])
+                            for post in posts:
+                                results.append({
+                                    'title': post.get('caption', '')[:100],
+                                    'url': post.get('url', ''),
+                                    'content': post.get('caption', ''),
+                                    'platform': post.get('platform', 'social'),
+                                    'engagement_rate': post.get('engagement_rate', 0),
+                                    'likes': post.get('likes', 0),
+                                    'comments': post.get('comments', 0),
+                                    'shares': post.get('shares', 0),
+                                    'author': post.get('author', ''),
+                                    'published_at': post.get('published_at', ''),
+                                    'viral_score': self._calculate_social_viral_score(post),
+                                    'relevance_score': 0.8
+                                })
+
+                            return {
+                                'success': True,
+                                'provider': 'SUPADATA',
+                                'results': results
+                            }
+                        else:
+                            error_text = await response.text()
+                            logger.error(f"❌ Supadata erro {response.status}: {error_text}")
+                            return {'success': False, 'error': f'HTTP {response.status}'}
+            else:
+                logger.error("aiohttp não disponível para Supadata Search")
+                return {'success': False, 'error': 'aiohttp not available'}
 
         except Exception as e:
             logger.error(f"❌ Erro Supadata: {e}")
@@ -708,62 +733,67 @@ class RealSearchOrchestrator:
             if not api_key:
                 return {'success': False, 'error': 'X API key não disponível'}
 
-            async with aiohttp.ClientSession() as session:
-                headers = {
-                    'Authorization': f'Bearer {api_key}',
-                    'Content-Type': 'application/json'
-                }
+            if AIOHTTP_AVAILABLE:
+                timeout = aiohttp.ClientTimeout(total=30)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    headers = {
+                        'Authorization': f'Bearer {api_key}',
+                        'Content-Type': 'application/json'
+                    }
 
-                params = {
-                    'query': f"{query} lang:pt",
-                    'max_results': 50,
-                    'tweet.fields': 'public_metrics,created_at,author_id',
-                    'user.fields': 'username,verified,public_metrics',
-                    'expansions': 'author_id'
-                }
+                    params = {
+                        'query': f"{query} lang:pt",
+                        'max_results': 50,
+                        'tweet.fields': 'public_metrics,created_at,author_id',
+                        'user.fields': 'username,verified,public_metrics',
+                        'expansions': 'author_id'
+                    }
 
-                async with session.get(
-                    'https://api.twitter.com/2/tweets/search/recent',
-                    params=params,
-                    headers=headers,
-                    timeout=30
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        results = []
+                    async with session.get(
+                        'https://api.twitter.com/2/tweets/search/recent',
+                        params=params,
+                        headers=headers,
+                        timeout=30
+                    ) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            results = []
 
-                        tweets = data.get('data', [])
-                        users = {user['id']: user for user in data.get('includes', {}).get('users', [])}
+                            tweets = data.get('data', [])
+                            users = {user['id']: user for user in data.get('includes', {}).get('users', [])}
 
-                        for tweet in tweets:
-                            author = users.get(tweet.get('author_id', ''), {})
-                            metrics = tweet.get('public_metrics', {})
+                            for tweet in tweets:
+                                author = users.get(tweet.get('author_id', ''), {})
+                                metrics = tweet.get('public_metrics', {})
 
-                            results.append({
-                                'title': tweet.get('text', '')[:100],
-                                'url': f"https://twitter.com/i/status/{tweet.get('id')}",
-                                'content': tweet.get('text', ''),
-                                'platform': 'twitter',
-                                'author': author.get('username', ''),
-                                'author_verified': author.get('verified', False),
-                                'retweets': metrics.get('retweet_count', 0),
-                                'likes': metrics.get('like_count', 0),
-                                'replies': metrics.get('reply_count', 0),
-                                'quotes': metrics.get('quote_count', 0),
-                                'published_at': tweet.get('created_at', ''),
-                                'viral_score': self._calculate_twitter_viral_score(metrics),
-                                'relevance_score': 0.75
-                            })
+                                results.append({
+                                    'title': tweet.get('text', '')[:100],
+                                    'url': f"https://twitter.com/i/status/{tweet.get('id')}",
+                                    'content': tweet.get('text', ''),
+                                    'platform': 'twitter',
+                                    'author': author.get('username', ''),
+                                    'author_verified': author.get('verified', False),
+                                    'retweets': metrics.get('retweet_count', 0),
+                                    'likes': metrics.get('like_count', 0),
+                                    'replies': metrics.get('reply_count', 0),
+                                    'quotes': metrics.get('quote_count', 0),
+                                    'published_at': tweet.get('created_at', ''),
+                                    'viral_score': self._calculate_twitter_viral_score(metrics),
+                                    'relevance_score': 0.75
+                                })
 
-                        return {
-                            'success': True,
-                            'provider': 'X',
-                            'results': results
-                        }
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"❌ X/Twitter erro {response.status}: {error_text}")
-                        return {'success': False, 'error': f'HTTP {response.status}'}
+                            return {
+                                'success': True,
+                                'provider': 'X',
+                                'results': results
+                            }
+                        else:
+                            error_text = await response.text()
+                            logger.error(f"❌ X/Twitter erro {response.status}: {error_text}")
+                            return {'success': False, 'error': f'HTTP {response.status}'}
+            else:
+                logger.error("aiohttp não disponível para Twitter Search")
+                return {'success': False, 'error': 'aiohttp not available'}
 
         except Exception as e:
             logger.error(f"❌ Erro X/Twitter: {e}")
@@ -777,54 +807,59 @@ class RealSearchOrchestrator:
             if not api_key:
                 return {'success': False, 'error': 'Exa API key não disponível'}
 
-            async with aiohttp.ClientSession() as session:
-                headers = {
-                    'x-api-key': api_key,
-                    'Content-Type': 'application/json'
-                }
+            if AIOHTTP_AVAILABLE:
+                timeout = aiohttp.ClientTimeout(total=30)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    headers = {
+                        'x-api-key': api_key,
+                        'Content-Type': 'application/json'
+                    }
 
-                payload = {
-                    'query': f"{query} Brasil mercado tendências",
-                    'numResults': 15,
-                    'useAutoprompt': True,
-                    'type': 'neural',
-                    'includeDomains': [
-                        'g1.globo.com', 'exame.com', 'valor.globo.com',
-                        'estadao.com.br', 'folha.uol.com.br', 'infomoney.com.br'
-                    ],
-                    'startPublishedDate': '2023-01-01'
-                }
+                    payload = {
+                        'query': f"{query} Brasil mercado tendências",
+                        'numResults': 15,
+                        'useAutoprompt': True,
+                        'type': 'neural',
+                        'includeDomains': [
+                            'g1.globo.com', 'exame.com', 'valor.globo.com',
+                            'estadao.com.br', 'folha.uol.com.br', 'infomoney.com.br'
+                        ],
+                        'startPublishedDate': '2023-01-01'
+                    }
 
-                async with session.post(
-                    self.service_urls['EXA'],
-                    json=payload,
-                    headers=headers,
-                    timeout=30
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        results = []
+                    async with session.post(
+                        self.service_urls['EXA'],
+                        json=payload,
+                        headers=headers,
+                        timeout=30
+                    ) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            results = []
 
-                        for item in data.get('results', []):
-                            results.append({
-                                'title': item.get('title', ''),
-                                'url': item.get('url', ''),
-                                'snippet': item.get('text', '')[:300],
-                                'source': 'exa_neural',
-                                'score': item.get('score', 0),
-                                'published_date': item.get('publishedDate', ''),
-                                'relevance_score': item.get('score', 0.8)
-                            })
+                            for item in data.get('results', []):
+                                results.append({
+                                    'title': item.get('title', ''),
+                                    'url': item.get('url', ''),
+                                    'snippet': item.get('text', '')[:300],
+                                    'source': 'exa_neural',
+                                    'score': item.get('score', 0),
+                                    'published_date': item.get('publishedDate', ''),
+                                    'relevance_score': item.get('score', 0.8)
+                                })
 
-                        return {
-                            'success': True,
-                            'provider': 'EXA',
-                            'results': results
-                        }
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"❌ Exa erro {response.status}: {error_text}")
-                        return {'success': False, 'error': f'HTTP {response.status}'}
+                            return {
+                                'success': True,
+                                'provider': 'EXA',
+                                'results': results
+                            }
+                        else:
+                            error_text = await response.text()
+                            logger.error(f"❌ Exa erro {response.status}: {error_text}")
+                            return {'success': False, 'error': f'HTTP {response.status}'}
+            else:
+                logger.error("aiohttp não disponível para Exa Search")
+                return {'success': False, 'error': 'aiohttp not available'}
 
         except Exception as e:
             logger.error(f"❌ Erro Exa: {e}")
@@ -838,49 +873,54 @@ class RealSearchOrchestrator:
             if not api_key:
                 return {'success': False, 'error': 'Serper API key não disponível'}
 
-            async with aiohttp.ClientSession() as session:
-                headers = {
-                    'X-API-KEY': api_key,
-                    'Content-Type': 'application/json'
-                }
+            if AIOHTTP_AVAILABLE:
+                timeout = aiohttp.ClientTimeout(total=30)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    headers = {
+                        'X-API-KEY': api_key,
+                        'Content-Type': 'application/json'
+                    }
 
-                payload = {
-                    'q': f"{query} Brasil mercado",
-                    'gl': 'br',
-                    'hl': 'pt',
-                    'num': 15,
-                    'autocorrect': True
-                }
+                    payload = {
+                        'q': f"{query} Brasil mercado",
+                        'gl': 'br',
+                        'hl': 'pt',
+                        'num': 15,
+                        'autocorrect': True
+                    }
 
-                async with session.post(
-                    self.service_urls['SERPER'],
-                    json=payload,
-                    headers=headers,
-                    timeout=30
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        results = []
+                    async with session.post(
+                        self.service_urls['SERPER'],
+                        json=payload,
+                        headers=headers,
+                        timeout=30
+                    ) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            results = []
 
-                        for item in data.get('organic', []):
-                            results.append({
-                                'title': item.get('title', ''),
-                                'url': item.get('link', ''),
-                                'snippet': item.get('snippet', ''),
-                                'source': 'serper_real',
-                                'position': item.get('position', 0),
-                                'relevance_score': 0.85
-                            })
+                            for item in data.get('organic', []):
+                                results.append({
+                                    'title': item.get('title', ''),
+                                    'url': item.get('link', ''),
+                                    'snippet': item.get('snippet', ''),
+                                    'source': 'serper_real',
+                                    'position': item.get('position', 0),
+                                    'relevance_score': 0.85
+                                })
 
-                        return {
-                            'success': True,
-                            'provider': 'SERPER',
-                            'results': results
-                        }
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"❌ Serper erro {response.status}: {error_text}")
-                        return {'success': False, 'error': f'HTTP {response.status}'}
+                            return {
+                                'success': True,
+                                'provider': 'SERPER',
+                                'results': results
+                            }
+                        else:
+                            error_text = await response.text()
+                            logger.error(f"❌ Serper erro {response.status}: {error_text}")
+                            return {'success': False, 'error': f'HTTP {response.status}'}
+            else:
+                logger.error("aiohttp não disponível para Serper Search")
+                return {'success': False, 'error': 'aiohttp not available'}
 
         except Exception as e:
             logger.error(f"❌ Erro Serper: {e}")
@@ -960,7 +1000,7 @@ class RealSearchOrchestrator:
                     if url and url not in seen_urls:
                         seen_urls.add(url)
                         unique_results.append(result)
-                
+
                 if unique_results:
                     logger.info(f"🔍 Salvando {len(unique_results)} resultados únicos de {provider} (removidas {len(valid_results) - len(unique_results)} duplicatas)")
                     for i, result in enumerate(unique_results):
@@ -987,11 +1027,11 @@ class RealSearchOrchestrator:
                             quality_score += 40.0
                         if url and url.startswith('http') and 'example.com' not in url:
                             quality_score += 30.0
-                        
+
                         # Bonus por relevância ao nicho
                         if any(keyword in (title + snippet).lower() for keyword in ['patchwork', 'costura', 'quilting', 'artesanato']):
                             quality_score += 20.0
-                        
+
                         # Log apenas se score for significativo
                         if quality_score >= 50.0:
                             logger.info(f"💯 Quality score: {quality_score} - {title[:50]}...")
